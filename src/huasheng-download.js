@@ -187,8 +187,8 @@ async function discoverScenes(page, args) {
   });
 
   let count = discovered.length ? Math.max(...discovered) : 1;
-  if (args.count) count = Math.max(count, args.count);
   if (args.lastUrl) count = Math.max(count, sceneNumberFromUrl(args.lastUrl));
+  if (args.count) count = args.count;
 
   if (count <= 1 && !args.count && !args.lastUrl) {
     console.warn('只发现到 1 个分镜。如果实际有更多分镜，请使用 --last-url 或 --count。');
