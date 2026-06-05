@@ -328,10 +328,7 @@ async function waitForModalVideoUrl(page, timeout = 6000) {
 }
 
 async function isMaterialModalOpen(page) {
-  const closeVisible = await page.locator(MODAL_CLOSE_SELECTOR).last().isVisible({ timeout: 300 }).catch(() => false);
-  if (closeVisible) return true;
-  const sources = await visibleVideoSources(page).catch(() => []);
-  return sources.length > 0;
+  return page.locator(MODAL_CLOSE_SELECTOR).last().isVisible({ timeout: 300 }).catch(() => false);
 }
 
 async function closeMaterialModal(page) {
