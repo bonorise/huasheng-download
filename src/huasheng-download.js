@@ -104,6 +104,15 @@ export function pad2(number) {
   return String(number).padStart(2, '0');
 }
 
+export function materialUrlKey(rawUrl) {
+  try {
+    const url = new URL(rawUrl);
+    return `${url.origin}${url.pathname}`;
+  } catch {
+    return rawUrl;
+  }
+}
+
 async function pauseForEnter(message) {
   const rl = createInterface({ input, output });
   try {
@@ -366,7 +375,7 @@ async function extractSceneMaterials(page, sceneNumber, args) {
   const materials = [];
   const extractionFailures = [];
   const seenCandidateKeys = new Set();
-  const seenVideoUrls = new Set();
+  const seenVideoKeys = new Set();
   let emptyScrolls = 0;
 
   while (emptyScrolls < DEFAULT_STOP_AFTER_EMPTY_SCROLLS) {
@@ -396,12 +405,14 @@ async function extractSceneMaterials(page, sceneNumber, args) {
         const videoUrl = domUrl || networkUrl;
         modalOpened = await isMaterialModalOpen(page);
 
-        if (videoUrl && !seenVideoUrls.has(videoUrl)) {
-          seenVideoUrls.add(videoUrl);
+        const videoKey = videoUrl ? materialUrlKey(videoUrl) : '';
+        if (videoUrl && !seenVideoKeys.has(videoKey)) {
+          seenVideoKeys.add(videoKey);
           materials.push({
             sceneNumber,
             materialNumber: materials.length + 1,
             url: videoUrl,
+            key: videoKey,
             candidate,
           });
           newVideosThisPass += 1;
