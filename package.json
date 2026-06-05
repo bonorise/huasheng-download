@@ -1,0 +1,20 @@
+{
+  "name": "huasheng-download",
+  "version": "1.0.0",
+  "description": "Download recommended storyboard video assets from huasheng.cn projects.",
+  "type": "module",
+  "bin": {
+    "huasheng-download": "./src/huasheng-download.js"
+  },
+  "main": "src/huasheng-download.js",
+  "scripts": {
+    "download": "node ./src/huasheng-download.js",
+    "check": "node --check ./src/huasheng-download.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "playwright": "^1.58.2"
+  }
+}

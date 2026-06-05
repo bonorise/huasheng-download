@@ -1,0 +1,5 @@
+node_modules/
+.browser-profile/
+output/
+*.log
+.DS_Store
