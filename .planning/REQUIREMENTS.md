@@ -1,7 +1,7 @@
 # Requirements: 华声分镜素材下载器
 
 **Defined:** 2026-06-05
-**Core Value:** 稳定、完整地把每个分镜的推荐视频素材下载到本地，并按分镜编号命名。
+**Core Value:** 稳定、完整地把用户收藏的视频素材下载到本地；需要时仍可按分镜下载推荐素材。
 
 ## v1 Requirements
 
@@ -10,6 +10,7 @@
 - [ ] **INPT-01**: 用户可以通过 CLI 输入华声项目 URL。
 - [ ] **INPT-02**: 用户可以指定输出目录，默认使用 `/Users/liubo/Desktop/hs-src`。
 - [ ] **INPT-03**: 用户可以在自动发现分镜失败时提供最后一个分镜 URL 或总数作为备用。
+- [ ] **INPT-04**: 用户可以通过 `--tab 收藏|推荐` 选择素材来源，默认使用 `收藏`。
 
 ### 登录与浏览器
 
@@ -32,11 +33,13 @@
 - [ ] **MATR-06**: 工具必须以 `.ClipChoiceList_contentWrap__Ii6jf` 推荐素材容器为扫描范围，不依赖页面是两列或三列布局。
 - [ ] **MATR-07**: 工具必须按素材卡片实际坐标排序，先上后下，同一行从左到右处理。
 - [ ] **MATR-08**: 工具必须通过 `button[aria-label="关闭"]` 关闭素材播放弹窗，并确认弹窗消失后才继续点击下一个封面。
+- [ ] **MATR-09**: 收藏模式必须只打开一次项目页，点击“收藏”tab 后从全局收藏素材池提取素材，不按分镜循环。
 
 ### 下载与输出
 
 - [ ] **DOWN-01**: 工具可以把每个素材下载到 `/Users/liubo/Desktop/hs-src`。
 - [ ] **DOWN-02**: 工具可以按 `分镜01_素材01.mp4` 格式命名文件。
+- [ ] **DOWN-06**: 收藏模式文件命名使用 `素材01.mp4`、`素材02.mp4` 格式。
 - [ ] **DOWN-03**: 同一素材出现在多个分镜时，工具仍按分镜分别保存。
 - [ ] **DOWN-04**: 工具可以生成 `manifest.json`，记录源 URL、分镜编号、素材序号、输出文件和状态。
 - [ ] **DOWN-05**: 工具可以生成失败记录，便于后续重试。
@@ -65,6 +68,7 @@
 | INPT-01 | Phase 1 | Pending |
 | INPT-02 | Phase 1 | Pending |
 | INPT-03 | Phase 2 | Pending |
+| INPT-04 | Phase 1 | Pending |
 | AUTH-01 | Phase 1 | Pending |
 | AUTH-02 | Phase 1 | Pending |
 | SCEN-01 | Phase 2 | Pending |
@@ -78,17 +82,19 @@
 | MATR-06 | Phase 3 | Pending |
 | MATR-07 | Phase 3 | Pending |
 | MATR-08 | Phase 3 | Pending |
+| MATR-09 | Phase 3 | Pending |
 | DOWN-01 | Phase 4 | Pending |
 | DOWN-02 | Phase 4 | Pending |
 | DOWN-03 | Phase 4 | Pending |
 | DOWN-04 | Phase 4 | Pending |
 | DOWN-05 | Phase 4 | Pending |
+| DOWN-06 | Phase 4 | Pending |
 
 **Coverage:**
-- v1 requirements: 21 total
-- Mapped to phases: 21
+- v1 requirements: 24 total
+- Mapped to phases: 24
 - Unmapped: 0
 
 ---
 *Requirements defined: 2026-06-05*
-*Last updated: 2026-06-06 after Phase 3 supplemental requirements*
+*Last updated: 2026-06-06 after collection-mode strategy update*

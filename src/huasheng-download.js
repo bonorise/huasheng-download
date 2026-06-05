@@ -12,6 +12,7 @@ const DEFAULT_PROFILE_DIR = path.resolve('.browser-profile');
 const DEFAULT_STOP_AFTER_EMPTY_SCROLLS = 3;
 const MATERIAL_CONTAINER_SELECTOR = '.ClipChoiceList_contentWrap__Ii6jf';
 const MODAL_CLOSE_SELECTOR = 'button[aria-label="关闭"]';
+const SUPPORTED_TABS = new Set(['收藏', '推荐']);
 
 function parseArgs(argv) {
   const args = {
@@ -24,6 +25,7 @@ function parseArgs(argv) {
     limitPerScene: 0,
     dryRun: false,
     slowMo: 80,
+    tab: '收藏',
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -40,6 +42,7 @@ function parseArgs(argv) {
     else if (arg === '--last-url') args.lastUrl = argv[++i];
     else if (arg === '--limit') args.limitPerScene = Number(argv[++i]);
     else if (arg === '--slow-mo') args.slowMo = Number(argv[++i]);
+    else if (arg === '--tab') args.tab = argv[++i];
     else if (arg === '--help' || arg === '-h') {
       printHelp();
       process.exit(0);
@@ -59,6 +62,9 @@ function parseArgs(argv) {
   if (args.limitPerScene && (!Number.isInteger(args.limitPerScene) || args.limitPerScene < 1)) {
     throw new Error('--limit 必须是大于 0 的整数。');
   }
+  if (!SUPPORTED_TABS.has(args.tab)) {
+    throw new Error('--tab 只支持 收藏 或 推荐。');
+  }
   return args;
 }
 
@@ -75,7 +81,8 @@ function printHelp() {
   --profile <目录>    Playwright 登录态目录，默认 ${DEFAULT_PROFILE_DIR}
   --count <数量>      分镜总数，自动发现失败时可用
   --last-url <URL>    最后一个分镜 URL，用于推算分镜总数
-  --limit <数量>      每个分镜最多下载多少个素材，默认不限制
+  --tab <收藏|推荐>   素材来源，默认 收藏
+  --limit <数量>      最多下载多少个素材；推荐模式下表示每个分镜最多数量
   --headless          无头模式。首次登录不建议使用
   --dry-run           只提取素材 URL，不下载
   --slow-mo <毫秒>    浏览器操作延迟，默认 80
@@ -215,10 +222,15 @@ async function openMaterialPanel(page) {
   const expanded = await clickFirstVisibleText(page, ['展开更多', '展开', '更多']);
   await page.waitForTimeout(900);
 
-  await clickFirstVisibleText(page, ['推荐']);
-  await page.waitForTimeout(900);
-
   return expanded;
+}
+
+async function selectMaterialTab(page, tab) {
+  const selected = await clickFirstVisibleText(page, [tab]);
+  await page.waitForTimeout(900);
+  if (!selected) {
+    throw new Error(`未找到素材 tab: ${tab}`);
+  }
 }
 
 async function materialContainer(page) {
@@ -370,8 +382,50 @@ async function extractSceneMaterials(page, sceneNumber, args) {
   if (!expanded) {
     console.warn(`[分镜 ${pad2(sceneNumber)}] 没有点到“展开更多”，将尝试直接扫描当前可见素材。`);
   }
+  await selectMaterialTab(page, '推荐');
   await materialContainer(page);
 
+  return extractVisibleMaterials(page, {
+    limit: args.limitPerScene,
+    sceneNumber,
+    logPrefix: `分镜 ${pad2(sceneNumber)}`,
+    recovery: async () => {
+      await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+      await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+      await openMaterialPanel(page);
+      await selectMaterialTab(page, '推荐');
+      await materialContainer(page);
+    },
+  });
+}
+
+async function extractCollectionMaterials(page, args) {
+  console.log(`\n[收藏] 打开 ${args.url}`);
+  await page.goto(args.url, { waitUntil: 'domcontentloaded', timeout: 60000 });
+  await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+
+  if (!args.headless && await isProbablyLoggedOut(page)) {
+    await pauseForEnter('页面需要登录。请在打开的浏览器窗口中确认登录状态。');
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+  }
+
+  const expanded = await openMaterialPanel(page);
+  if (!expanded) {
+    console.warn('[收藏] 没有点到“展开更多”，将尝试直接扫描当前可见素材。');
+  }
+  await selectMaterialTab(page, '收藏');
+  await materialContainer(page);
+
+  return extractVisibleMaterials(page, {
+    limit: args.limitPerScene,
+    sceneNumber: null,
+    logPrefix: '收藏',
+    recovery: null,
+  });
+}
+
+async function extractVisibleMaterials(page, { limit, sceneNumber, logPrefix, recovery }) {
   const materials = [];
   const extractionFailures = [];
   const seenCandidateKeys = new Set();
@@ -383,7 +437,7 @@ async function extractSceneMaterials(page, sceneNumber, args) {
     let newVideosThisPass = 0;
 
     for (const candidate of candidates) {
-      if (args.limitPerScene && materials.length >= args.limitPerScene) break;
+      if (limit && materials.length >= limit) break;
       seenCandidateKeys.add(candidate.key);
 
       const locator = page.locator(`[data-hs-candidate-id="${candidate.id}"]`).first();
@@ -416,7 +470,7 @@ async function extractSceneMaterials(page, sceneNumber, args) {
             candidate,
           });
           newVideosThisPass += 1;
-          console.log(`[分镜 ${pad2(sceneNumber)}] 捕获素材 ${pad2(materials.length)}: ${shortUrl(videoUrl)}`);
+          console.log(`[${logPrefix}] 捕获素材 ${pad2(materials.length)}: ${shortUrl(videoUrl)}`);
         } else if (!videoUrl) {
           failureIndex = extractionFailures.push({
             sceneNumber,
@@ -433,7 +487,7 @@ async function extractSceneMaterials(page, sceneNumber, args) {
           if (failureIndex >= 0) extractionFailures[failureIndex].modalClosed = true;
         }
       } catch (error) {
-        console.warn(`[分镜 ${pad2(sceneNumber)}] 素材候选处理失败: ${error.message}`);
+        console.warn(`[${logPrefix}] 素材候选处理失败: ${error.message}`);
         failureIndex = extractionFailures.push({
           sceneNumber,
           materialNumber: materials.length + 1,
@@ -447,19 +501,22 @@ async function extractSceneMaterials(page, sceneNumber, args) {
             modalClosed = true;
             extractionFailures[failureIndex].modalClosed = true;
           } catch (closeError) {
-            console.warn(`[分镜 ${pad2(sceneNumber)}] 弹窗关闭失败，重新加载当前分镜恢复状态: ${closeError.message}`);
+            console.warn(`[${logPrefix}] 弹窗关闭失败: ${closeError.message}`);
             extractionFailures[failureIndex].modalClosed = false;
-            extractionFailures[failureIndex].recovery = `重新加载当前分镜: ${closeError.message}`;
-            await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
-            await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
-            await openMaterialPanel(page);
-            await materialContainer(page);
+            if (recovery) {
+              extractionFailures[failureIndex].recovery = `重新加载当前素材列表: ${closeError.message}`;
+              await recovery();
+            } else {
+              extractionFailures[failureIndex].recovery = '弹窗未能关闭，停止当前素材列表提取';
+              materials.extractionFailures = extractionFailures;
+              return materials;
+            }
           }
         }
       }
     }
 
-    if (args.limitPerScene && materials.length >= args.limitPerScene) break;
+    if (limit && materials.length >= limit) break;
 
     const scroll = await scrollMaterialList(page);
     await page.waitForTimeout(800);
@@ -485,7 +542,9 @@ function shortUrl(url) {
 }
 
 async function downloadMaterial(context, item, outDir, referer) {
-  const filename = `分镜${pad2(item.sceneNumber)}_素材${pad2(item.materialNumber)}.mp4`;
+  const filename = item.sceneNumber
+    ? `分镜${pad2(item.sceneNumber)}_素材${pad2(item.materialNumber)}.mp4`
+    : `素材${pad2(item.materialNumber)}.mp4`;
   const filePath = path.join(outDir, filename);
   const response = await context.request.get(item.url, {
     timeout: 120000,
@@ -514,6 +573,7 @@ async function main() {
     projectUrl: args.url,
     outDir: args.outDir,
     profileDir: args.profileDir,
+    tab: args.tab,
     items: [],
   };
   const failures = [];
@@ -529,56 +589,42 @@ async function main() {
   const page = context.pages()[0] || await context.newPage();
 
   try {
-    const scenes = await discoverScenes(page, args);
-    console.log(`将处理 ${scenes.length} 个分镜: ${scenes.map((n) => pad2(n)).join(', ')}`);
+    if (args.tab === '收藏') {
+      const materials = await extractCollectionMaterials(page, args);
+      await processMaterials({
+        materials,
+        context,
+        args,
+        manifest,
+        failures,
+        manifestPath,
+        failuresPath,
+        referer: args.url,
+        label: '收藏',
+      });
+    } else {
+      const scenes = await discoverScenes(page, args);
+      console.log(`将处理 ${scenes.length} 个分镜: ${scenes.map((n) => pad2(n)).join(', ')}`);
 
-    for (const sceneNumber of scenes) {
-      try {
-        const materials = await extractSceneMaterials(page, sceneNumber, args);
-        if (materials.extractionFailures?.length) {
-          failures.push(...materials.extractionFailures);
+      for (const sceneNumber of scenes) {
+        try {
+          const materials = await extractSceneMaterials(page, sceneNumber, args);
+          await processMaterials({
+            materials,
+            context,
+            args,
+            manifest,
+            failures,
+            manifestPath,
+            failuresPath,
+            referer: sceneUrl(args.url, sceneNumber),
+            label: `分镜 ${pad2(sceneNumber)}`,
+          });
+        } catch (error) {
+          failures.push({ sceneNumber, reason: error.message });
           await writeJson(failuresPath, failures);
+          console.warn(`[分镜 ${pad2(sceneNumber)}] 处理失败: ${error.message}`);
         }
-        if (!materials.length) {
-          failures.push({ sceneNumber, reason: '未发现素材视频 URL' });
-          await writeJson(failuresPath, failures);
-          continue;
-        }
-
-        for (const item of materials) {
-          const record = {
-            sceneNumber: item.sceneNumber,
-            materialNumber: item.materialNumber,
-            sourceUrl: item.url,
-            status: args.dryRun ? 'dry-run' : 'pending',
-          };
-
-          try {
-            if (!args.dryRun) {
-              const result = await downloadMaterial(context, item, args.outDir, sceneUrl(args.url, sceneNumber));
-              Object.assign(record, {
-                status: 'downloaded',
-                filename: result.filename,
-                filePath: result.filePath,
-                bytes: result.bytes,
-              });
-              console.log(`[分镜 ${pad2(sceneNumber)}] 已下载 ${result.filename} (${result.bytes} bytes)`);
-            }
-          } catch (error) {
-            record.status = 'failed';
-            record.error = error.message;
-            failures.push(record);
-            console.warn(`[分镜 ${pad2(sceneNumber)}] 下载失败 素材${pad2(item.materialNumber)}: ${error.message}`);
-          }
-
-          manifest.items.push(record);
-          await writeJson(manifestPath, manifest);
-          await writeJson(failuresPath, failures);
-        }
-      } catch (error) {
-        failures.push({ sceneNumber, reason: error.message });
-        await writeJson(failuresPath, failures);
-        console.warn(`[分镜 ${pad2(sceneNumber)}] 处理失败: ${error.message}`);
       }
     }
   } finally {
@@ -597,6 +643,49 @@ async function main() {
   console.log(`\n完成。清单: ${manifestPath}`);
   console.log(`失败记录: ${failuresPath}`);
   console.log(`输出目录: ${args.outDir}`);
+}
+
+async function processMaterials({ materials, context, args, manifest, failures, manifestPath, failuresPath, referer, label }) {
+  if (materials.extractionFailures?.length) {
+    failures.push(...materials.extractionFailures);
+    await writeJson(failuresPath, failures);
+  }
+  if (!materials.length) {
+    failures.push({ sceneNumber: null, label, reason: '未发现素材视频 URL' });
+    await writeJson(failuresPath, failures);
+    return;
+  }
+
+  for (const item of materials) {
+    const record = {
+      sceneNumber: item.sceneNumber,
+      materialNumber: item.materialNumber,
+      sourceUrl: item.url,
+      status: args.dryRun ? 'dry-run' : 'pending',
+    };
+
+    try {
+      if (!args.dryRun) {
+        const result = await downloadMaterial(context, item, args.outDir, referer);
+        Object.assign(record, {
+          status: 'downloaded',
+          filename: result.filename,
+          filePath: result.filePath,
+          bytes: result.bytes,
+        });
+        console.log(`[${label}] 已下载 ${result.filename} (${result.bytes} bytes)`);
+      }
+    } catch (error) {
+      record.status = 'failed';
+      record.error = error.message;
+      failures.push(record);
+      console.warn(`[${label}] 下载失败 素材${pad2(item.materialNumber)}: ${error.message}`);
+    }
+
+    manifest.items.push(record);
+    await writeJson(manifestPath, manifest);
+    await writeJson(failuresPath, failures);
+  }
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

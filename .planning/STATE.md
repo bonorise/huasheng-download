@@ -23,6 +23,7 @@ Initialized. Ready for implementation.
 - 重复素材按分镜各保存一份。
 - Phase 3 补充需求：推荐素材必须从 `.ClipChoiceList_contentWrap__Ii6jf` 容器扫描，兼容两列/三列布局。
 - Phase 3 补充需求：素材播放弹窗必须点击 `button[aria-label="关闭"]` 关闭；`Esc` 已测试无效。
+- Phase 3/4 策略更新：默认走全局“收藏”tab，不按分镜循环，输出 `素材01.mp4`；`--tab 推荐` 才走按分镜推荐模式。
 
 ---
-*Last updated: 2026-06-06 after Phase 3 supplemental requirements*
+*Last updated: 2026-06-06 after collection-mode strategy update*
