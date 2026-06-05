@@ -10,6 +10,8 @@ import { stdin as input, stdout as output } from 'node:process';
 const DEFAULT_OUT_DIR = path.join(os.homedir(), 'Desktop', 'hs-src');
 const DEFAULT_PROFILE_DIR = path.resolve('.browser-profile');
 const DEFAULT_STOP_AFTER_EMPTY_SCROLLS = 3;
+const MATERIAL_CONTAINER_SELECTOR = '.ClipChoiceList_contentWrap__Ii6jf';
+const MODAL_CLOSE_SELECTOR = 'button[aria-label="关闭"]';
 
 function parseArgs(argv) {
   const args = {
@@ -80,7 +82,7 @@ function printHelp() {
 `);
 }
 
-function sceneUrl(baseUrl, sceneNumber) {
+export function sceneUrl(baseUrl, sceneNumber) {
   const url = new URL(baseUrl);
   if (sceneNumber <= 1) {
     url.searchParams.delete('clip');
@@ -90,7 +92,7 @@ function sceneUrl(baseUrl, sceneNumber) {
   return url.toString();
 }
 
-function sceneNumberFromUrl(rawUrl) {
+export function sceneNumberFromUrl(rawUrl) {
   const url = new URL(rawUrl);
   const clip = url.searchParams.get('clip');
   if (clip === null) return 1;
@@ -98,7 +100,7 @@ function sceneNumberFromUrl(rawUrl) {
   return Number.isInteger(clipNumber) && clipNumber >= 0 ? clipNumber + 1 : 1;
 }
 
-function pad2(number) {
+export function pad2(number) {
   return String(number).padStart(2, '0');
 }
 
@@ -210,12 +212,23 @@ async function openMaterialPanel(page) {
   return expanded;
 }
 
+async function materialContainer(page) {
+  const container = page.locator(MATERIAL_CONTAINER_SELECTOR).first();
+  const visible = await container.isVisible({ timeout: 5000 }).catch(() => false);
+  if (!visible) {
+    throw new Error(`未找到推荐素材容器: ${MATERIAL_CONTAINER_SELECTOR}`);
+  }
+  return container;
+}
+
 async function markVisibleMaterialCandidates(page, seenKeys) {
-  return page.evaluate((seen) => {
+  return page.evaluate(({ selector, seen }) => {
+    const container = document.querySelector(selector);
+    if (!container) return [];
+
     const seenSet = new Set(seen);
-    const viewportW = window.innerWidth || document.documentElement.clientWidth;
-    const viewportH = window.innerHeight || document.documentElement.clientHeight;
-    const elements = Array.from(document.querySelectorAll('img, [style*="background-image"], video, canvas'));
+    const containerRect = container.getBoundingClientRect();
+    const elements = Array.from(container.querySelectorAll('img, [style*="background-image"], video, canvas'));
     const candidates = [];
 
     function visibleRect(el) {
@@ -223,15 +236,14 @@ async function markVisibleMaterialCandidates(page, seenKeys) {
       const style = window.getComputedStyle(el);
       if (style.visibility === 'hidden' || style.display === 'none' || Number(style.opacity) === 0) return null;
       if (rect.width < 48 || rect.height < 48) return null;
-      if (rect.bottom <= 0 || rect.right <= 0 || rect.top >= viewportH || rect.left >= viewportW) return null;
+      if (rect.bottom <= containerRect.top || rect.top >= containerRect.bottom) return null;
+      if (rect.right <= containerRect.left || rect.left >= containerRect.right) return null;
       return rect;
     }
 
     for (const el of elements) {
       const rect = visibleRect(el);
       if (!rect) continue;
-      if (rect.left < viewportW * 0.35) continue;
-      if (rect.width > viewportW * 0.65 || rect.height > viewportH * 0.75) continue;
 
       const style = window.getComputedStyle(el);
       const src = el.currentSrc || el.src || style.backgroundImage || '';
@@ -253,7 +265,7 @@ async function markVisibleMaterialCandidates(page, seenKeys) {
 
     candidates.sort((a, b) => (a.y - b.y) || (a.x - b.x));
     return candidates;
-  }, Array.from(seenKeys));
+  }, { selector: MATERIAL_CONTAINER_SELECTOR, seen: Array.from(seenKeys) });
 }
 
 async function visibleVideoSources(page) {
@@ -276,38 +288,61 @@ async function visibleVideoSources(page) {
   });
 }
 
-async function closeMaterialModal(page) {
-  await page.keyboard.press('Escape').catch(() => {});
-  await page.waitForTimeout(250);
-  const closed = await clickFirstVisibleText(page, ['关闭', '×', '取消'], 1000).catch(() => false);
-  if (!closed) {
-    const viewport = page.viewportSize();
-    if (viewport) await page.mouse.click(viewport.width - 28, 28).catch(() => {});
+function waitForMp4Response(page, timeout = 6000) {
+  return page.waitForResponse((response) => {
+    const url = response.url();
+    return /\.mp4(\?|$)/.test(url) && response.status() < 500;
+  }, { timeout }).then((response) => response.url()).catch(() => '');
+}
+
+async function waitForModalVideoUrl(page, timeout = 6000) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    const sources = await visibleVideoSources(page);
+    const url = sources.find((src) => /\.mp4(\?|$)/.test(src));
+    if (url) return url;
+    await page.waitForTimeout(250);
   }
-  await page.waitForTimeout(350);
+  return '';
+}
+
+async function isMaterialModalOpen(page) {
+  const closeVisible = await page.locator(MODAL_CLOSE_SELECTOR).last().isVisible({ timeout: 300 }).catch(() => false);
+  if (closeVisible) return true;
+  const sources = await visibleVideoSources(page).catch(() => []);
+  return sources.length > 0;
+}
+
+async function closeMaterialModal(page) {
+  const closeButton = page.locator(MODAL_CLOSE_SELECTOR).last();
+  const visible = await closeButton.isVisible({ timeout: 3000 }).catch(() => false);
+  if (!visible) {
+    throw new Error(`未找到素材播放弹窗关闭按钮: ${MODAL_CLOSE_SELECTOR}`);
+  }
+
+  await closeButton.click({ timeout: 3000 });
+  await page.waitForTimeout(300);
+
+  const stillOpen = await isMaterialModalOpen(page);
+  if (stillOpen) {
+    throw new Error('点击关闭按钮后素材播放弹窗仍未消失');
+  }
 }
 
 async function scrollMaterialList(page) {
-  return page.evaluate(() => {
-    const viewportW = window.innerWidth || document.documentElement.clientWidth;
-    const viewportH = window.innerHeight || document.documentElement.clientHeight;
-    const scrollables = Array.from(document.querySelectorAll('body, body *')).filter((el) => {
-      const rect = el.getBoundingClientRect();
-      const style = window.getComputedStyle(el);
-      if (rect.left < viewportW * 0.3 || rect.height < 160) return false;
-      if (!/(auto|scroll)/.test(`${style.overflowY}${style.overflow}`)) return false;
-      return el.scrollHeight > el.clientHeight + 40;
-    });
-    scrollables.sort((a, b) => {
-      const ar = a.getBoundingClientRect();
-      const br = b.getBoundingClientRect();
-      return (br.height * br.width) - (ar.height * ar.width);
-    });
-    const target = scrollables[0] || document.scrollingElement || document.documentElement;
-    const before = target.scrollTop;
-    target.scrollBy({ top: Math.floor(viewportH * 0.75), behavior: 'instant' });
-    return { before, after: target.scrollTop, max: target.scrollHeight - target.clientHeight };
-  });
+  return page.evaluate((selector) => {
+    const container = document.querySelector(selector);
+    if (!container) return { before: 0, after: 0, max: 0, missing: true };
+    const before = container.scrollTop;
+    const amount = Math.max(160, Math.floor(container.clientHeight * 0.75));
+    container.scrollBy({ top: amount, behavior: 'instant' });
+    return {
+      before,
+      after: container.scrollTop,
+      max: container.scrollHeight - container.clientHeight,
+      missing: false,
+    };
+  }, MATERIAL_CONTAINER_SELECTOR);
 }
 
 async function extractSceneMaterials(page, sceneNumber, args) {
@@ -326,8 +361,10 @@ async function extractSceneMaterials(page, sceneNumber, args) {
   if (!expanded) {
     console.warn(`[分镜 ${pad2(sceneNumber)}] 没有点到“展开更多”，将尝试直接扫描当前可见素材。`);
   }
+  await materialContainer(page);
 
   const materials = [];
+  const extractionFailures = [];
   const seenCandidateKeys = new Set();
   const seenVideoUrls = new Set();
   let emptyScrolls = 0;
@@ -340,37 +377,75 @@ async function extractSceneMaterials(page, sceneNumber, args) {
       if (args.limitPerScene && materials.length >= args.limitPerScene) break;
       seenCandidateKeys.add(candidate.key);
 
-      const beforeSources = new Set(await visibleVideoSources(page));
       const locator = page.locator(`[data-hs-candidate-id="${candidate.id}"]`).first();
       const visible = await locator.isVisible({ timeout: 500 }).catch(() => false);
       if (!visible) continue;
 
-      await locator.scrollIntoViewIfNeeded().catch(() => {});
-      await locator.click({ timeout: 3000 }).catch(async () => {
-        await locator.click({ force: true, timeout: 2000 });
-      }).catch(() => {});
+      let modalOpened = false;
+      let modalClosed = false;
+      let failureIndex = -1;
+      try {
+        await locator.scrollIntoViewIfNeeded().catch(() => {});
+        const mp4FromNetwork = waitForMp4Response(page);
+        await locator.click({ timeout: 3000 }).catch(async () => {
+          await locator.click({ force: true, timeout: 2000 });
+        });
 
-      let videoUrl = '';
-      for (let attempt = 0; attempt < 12; attempt += 1) {
-        await page.waitForTimeout(350);
-        const afterSources = await visibleVideoSources(page);
-        videoUrl = afterSources.find((src) => !beforeSources.has(src)) || afterSources[0] || '';
-        if (videoUrl) break;
-      }
+        const domUrl = await waitForModalVideoUrl(page);
+        const networkUrl = await mp4FromNetwork;
+        const videoUrl = domUrl || networkUrl;
+        modalOpened = await isMaterialModalOpen(page);
 
-      if (videoUrl && !seenVideoUrls.has(videoUrl)) {
-        seenVideoUrls.add(videoUrl);
-        materials.push({
+        if (videoUrl && !seenVideoUrls.has(videoUrl)) {
+          seenVideoUrls.add(videoUrl);
+          materials.push({
+            sceneNumber,
+            materialNumber: materials.length + 1,
+            url: videoUrl,
+            candidate,
+          });
+          newVideosThisPass += 1;
+          console.log(`[分镜 ${pad2(sceneNumber)}] 捕获素材 ${pad2(materials.length)}: ${shortUrl(videoUrl)}`);
+        } else if (!videoUrl) {
+          failureIndex = extractionFailures.push({
+            sceneNumber,
+            materialNumber: materials.length + 1,
+            candidate,
+            reason: '未从弹窗 DOM 或网络请求捕获到 mp4 URL',
+            modalClosed: false,
+          }) - 1;
+        }
+
+        if (modalOpened) {
+          await closeMaterialModal(page);
+          modalClosed = true;
+          if (failureIndex >= 0) extractionFailures[failureIndex].modalClosed = true;
+        }
+      } catch (error) {
+        console.warn(`[分镜 ${pad2(sceneNumber)}] 素材候选处理失败: ${error.message}`);
+        failureIndex = extractionFailures.push({
           sceneNumber,
           materialNumber: materials.length + 1,
-          url: videoUrl,
           candidate,
-        });
-        newVideosThisPass += 1;
-        console.log(`[分镜 ${pad2(sceneNumber)}] 捕获素材 ${pad2(materials.length)}: ${shortUrl(videoUrl)}`);
+          reason: error.message,
+          modalClosed,
+        }) - 1;
+        if (modalOpened || await isMaterialModalOpen(page)) {
+          try {
+            await closeMaterialModal(page);
+            modalClosed = true;
+            extractionFailures[failureIndex].modalClosed = true;
+          } catch (closeError) {
+            console.warn(`[分镜 ${pad2(sceneNumber)}] 弹窗关闭失败，重新加载当前分镜恢复状态: ${closeError.message}`);
+            extractionFailures[failureIndex].modalClosed = false;
+            extractionFailures[failureIndex].recovery = `重新加载当前分镜: ${closeError.message}`;
+            await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+            await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+            await openMaterialPanel(page);
+            await materialContainer(page);
+          }
+        }
       }
-
-      await closeMaterialModal(page);
     }
 
     if (args.limitPerScene && materials.length >= args.limitPerScene) break;
@@ -384,6 +459,7 @@ async function extractSceneMaterials(page, sceneNumber, args) {
     }
   }
 
+  materials.extractionFailures = extractionFailures;
   return materials;
 }
 
@@ -448,6 +524,10 @@ async function main() {
     for (const sceneNumber of scenes) {
       try {
         const materials = await extractSceneMaterials(page, sceneNumber, args);
+        if (materials.extractionFailures?.length) {
+          failures.push(...materials.extractionFailures);
+          await writeJson(failuresPath, failures);
+        }
         if (!materials.length) {
           failures.push({ sceneNumber, reason: '未发现素材视频 URL' });
           await writeJson(failuresPath, failures);
@@ -508,7 +588,9 @@ async function main() {
   console.log(`输出目录: ${args.outDir}`);
 }
 
-main().catch((error) => {
-  console.error(`\n错误: ${error.message}`);
-  process.exitCode = 1;
-});
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch((error) => {
+    console.error(`\n错误: ${error.message}`);
+    process.exitCode = 1;
+  });
+}

@@ -29,6 +29,9 @@
 - [ ] **MATR-03**: 工具可以逐个点击素材封面，打开素材播放弹窗。
 - [ ] **MATR-04**: 工具可以从素材播放弹窗中读取真实 `<video src>` mp4 地址。
 - [ ] **MATR-05**: 工具可以关闭弹窗并继续处理下一个素材。
+- [ ] **MATR-06**: 工具必须以 `.ClipChoiceList_contentWrap__Ii6jf` 推荐素材容器为扫描范围，不依赖页面是两列或三列布局。
+- [ ] **MATR-07**: 工具必须按素材卡片实际坐标排序，先上后下，同一行从左到右处理。
+- [ ] **MATR-08**: 工具必须通过 `button[aria-label="关闭"]` 关闭素材播放弹窗，并确认弹窗消失后才继续点击下一个封面。
 
 ### 下载与输出
 
@@ -72,6 +75,9 @@
 | MATR-03 | Phase 3 | Pending |
 | MATR-04 | Phase 3 | Pending |
 | MATR-05 | Phase 3 | Pending |
+| MATR-06 | Phase 3 | Pending |
+| MATR-07 | Phase 3 | Pending |
+| MATR-08 | Phase 3 | Pending |
 | DOWN-01 | Phase 4 | Pending |
 | DOWN-02 | Phase 4 | Pending |
 | DOWN-03 | Phase 4 | Pending |
@@ -79,10 +85,10 @@
 | DOWN-05 | Phase 4 | Pending |
 
 **Coverage:**
-- v1 requirements: 18 total
-- Mapped to phases: 18
+- v1 requirements: 21 total
+- Mapped to phases: 21
 - Unmapped: 0
 
 ---
 *Requirements defined: 2026-06-05*
-*Last updated: 2026-06-05 after initialization*
+*Last updated: 2026-06-06 after Phase 3 supplemental requirements*

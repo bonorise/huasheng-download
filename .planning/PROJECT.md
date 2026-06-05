@@ -21,6 +21,8 @@
 - [ ] 工具可以从页面 UI 发现分镜列表，或在必要时接受最后一个分镜 URL 推算范围。
 - [ ] 工具可以对每个分镜点击“展开更多”，加载“推荐”素材列表。
 - [ ] 工具可以逐个打开素材封面弹窗，提取 `<video>` 的 `src` 地址。
+- [ ] 工具可以在 `.ClipChoiceList_contentWrap__Ii6jf` 推荐素材容器中按坐标顺序处理素材，兼容两列、三列或更多列布局。
+- [ ] 工具可以点击素材播放弹窗右上角 `button[aria-label="关闭"]`，并确认弹窗关闭后再处理下一个素材。
 - [ ] 工具可以把每个分镜的所有推荐视频素材下载到 `/Users/liubo/Desktop/hs-src`。
 - [ ] 文件命名使用 `分镜01_素材01.mp4` 格式。
 - [ ] 重复素材在不同分镜中也各保存一份，便于按分镜管理。
@@ -57,6 +59,8 @@
 | 按分镜重复保存同一素材 | 用户希望每个分镜独立管理 | — Pending |
 | 命名格式为 `分镜01_素材01.mp4` | 用户选择最简编号命名 | — Pending |
 | 优先从页面 UI 读取分镜列表 | 用户选择页面内发现，最后分镜 URL 可作为备用 | — Pending |
+| Phase 3 素材提取改为容器驱动 | 测试发现素材布局可能是两列或三列，宽泛右侧扫描不够稳定 | — Pending |
+| 弹窗关闭只使用 `button[aria-label="关闭"]` | 用户测试确认 `Esc` 无法关闭素材播放弹窗 | — Pending |
 
 ## Evolution
 
@@ -76,4 +80,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-06-05 after initialization*
+*Last updated: 2026-06-06 after Phase 3 supplemental requirements*

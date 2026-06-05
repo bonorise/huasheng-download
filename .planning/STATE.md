@@ -21,6 +21,8 @@ Initialized. Ready for implementation.
 - 分镜优先从页面 UI 发现；最后分镜 URL 可作为备用。
 - 文件命名为 `分镜01_素材01.mp4`。
 - 重复素材按分镜各保存一份。
+- Phase 3 补充需求：推荐素材必须从 `.ClipChoiceList_contentWrap__Ii6jf` 容器扫描，兼容两列/三列布局。
+- Phase 3 补充需求：素材播放弹窗必须点击 `button[aria-label="关闭"]` 关闭；`Esc` 已测试无效。
 
 ---
-*Last updated: 2026-06-05 after initialization*
+*Last updated: 2026-06-06 after Phase 3 supplemental requirements*
