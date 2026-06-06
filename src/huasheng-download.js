@@ -135,8 +135,8 @@ export function collectionCardSignature({ src, cardText = '' }) {
   };
 }
 
-export function shouldUncollectMaterial({ tab, status, dryRun }) {
-  return tab === '收藏' && status === 'downloaded' && !dryRun;
+export function shouldUncollectMaterial({ tab, status, dryRun, uncollectStatus }) {
+  return tab === '收藏' && status === 'downloaded' && !dryRun && uncollectStatus !== 'uncollected';
 }
 
 export function collectionCleanupQueue(items, { tab, dryRun }) {
@@ -145,6 +145,7 @@ export function collectionCleanupQueue(items, { tab, dryRun }) {
     tab,
     status: item.status,
     dryRun,
+    uncollectStatus: item.uncollectStatus,
   }));
 }
 
@@ -487,6 +488,14 @@ async function extractVisibleMaterials(page, {
   const seenVideoKeys = new Set();
   let emptyScrolls = 0;
 
+  if (includeCollectionSignature) {
+    const iconCount = await countCollectIconsInContainer(page);
+    if (iconCount === 0) {
+      console.log(`[${logPrefix}] 收藏列表中已无星标素材，提取结束`);
+      return materials;
+    }
+  }
+
   while (emptyScrolls < DEFAULT_STOP_AFTER_EMPTY_SCROLLS) {
     const candidates = await markVisibleMaterialCandidates(page, seenCandidateKeys);
     let newVideosThisPass = 0;
@@ -663,6 +672,17 @@ async function resetMaterialListScroll(page) {
   await page.waitForTimeout(300);
 }
 
+async function countCollectIconsInContainer(page) {
+  return page.evaluate(({ containerSelector, iconSelector }) => {
+    const container = document.querySelector(containerSelector);
+    if (!container) return 0;
+    return container.querySelectorAll(iconSelector).length;
+  }, {
+    containerSelector: MATERIAL_CONTAINER_SELECTOR,
+    iconSelector: COLLECT_ICON_SELECTOR,
+  });
+}
+
 async function findCollectionCard(page, signature) {
   if (!signature?.coverKey) {
     throw new Error('收藏素材缺少封面定位特征');
@@ -837,27 +857,51 @@ async function main() {
 
   try {
     if (args.tab === '收藏') {
-      const materials = await extractCollectionMaterials(page, args);
-      await processMaterials({
-        materials,
-        context,
-        args,
-        manifest,
-        failures,
-        manifestPath,
-        failuresPath,
-        referer: args.url,
-        label: '收藏',
-      });
-      await writeJson(manifestPath, manifest);
-      await cleanupDownloadedCollections({
-        page,
-        args,
-        manifest,
-        failures,
-        manifestPath,
-        failuresPath,
-      });
+      let passCount = 0;
+      const downloadedVideoKeys = new Set();
+
+      while (true) {
+        passCount += 1;
+        console.log(`\n[收藏] === 第 ${passCount} 轮提取 ===`);
+
+        const materials = await extractCollectionMaterials(page, args);
+
+        const newMaterials = materials.filter((m) => !downloadedVideoKeys.has(m.key));
+        if (materials.length > newMaterials.length) {
+          console.log(`[收藏] 跳过 ${materials.length - newMaterials.length} 个已下载的素材`);
+        }
+
+        if (!newMaterials.length) {
+          console.log('[收藏] 收藏列表已清空，没有更多素材');
+          break;
+        }
+
+        console.log(`[收藏] 第 ${passCount} 轮发现 ${newMaterials.length} 个新素材`);
+        for (const m of newMaterials) {
+          downloadedVideoKeys.add(m.key);
+        }
+
+        await processMaterials({
+          materials: newMaterials,
+          context,
+          args,
+          manifest,
+          failures,
+          manifestPath,
+          failuresPath,
+          referer: args.url,
+          label: '收藏',
+        });
+        await writeJson(manifestPath, manifest);
+        await cleanupDownloadedCollections({
+          page,
+          args,
+          manifest,
+          failures,
+          manifestPath,
+          failuresPath,
+        });
+      }
     } else {
       const scenes = await discoverScenes(page, args);
       console.log(`将处理 ${scenes.length} 个分镜: ${scenes.map((n) => pad2(n)).join(', ')}`);

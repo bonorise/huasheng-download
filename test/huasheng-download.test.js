@@ -67,10 +67,11 @@ test('collectionCardSignature keeps stable cover and card text features', () => 
 });
 
 test('shouldUncollectMaterial only selects successful collection downloads', () => {
-  assert.equal(shouldUncollectMaterial({ tab: '收藏', status: 'downloaded', dryRun: false }), true);
-  assert.equal(shouldUncollectMaterial({ tab: '收藏', status: 'failed', dryRun: false }), false);
-  assert.equal(shouldUncollectMaterial({ tab: '收藏', status: 'dry-run', dryRun: true }), false);
-  assert.equal(shouldUncollectMaterial({ tab: '推荐', status: 'downloaded', dryRun: false }), false);
+  assert.equal(shouldUncollectMaterial({ tab: '收藏', status: 'downloaded', dryRun: false, uncollectStatus: 'skipped' }), true);
+  assert.equal(shouldUncollectMaterial({ tab: '收藏', status: 'failed', dryRun: false, uncollectStatus: 'skipped' }), false);
+  assert.equal(shouldUncollectMaterial({ tab: '收藏', status: 'dry-run', dryRun: true, uncollectStatus: 'skipped' }), false);
+  assert.equal(shouldUncollectMaterial({ tab: '推荐', status: 'downloaded', dryRun: false, uncollectStatus: 'skipped' }), false);
+  assert.equal(shouldUncollectMaterial({ tab: '收藏', status: 'downloaded', dryRun: false, uncollectStatus: 'uncollected' }), false);
 });
 
 test('collectionCleanupQueue only returns downloaded collection records', () => {
@@ -78,6 +79,7 @@ test('collectionCleanupQueue only returns downloaded collection records', () => 
     { materialNumber: 1, status: 'downloaded' },
     { materialNumber: 2, status: 'failed' },
     { materialNumber: 3, status: 'dry-run' },
+    { materialNumber: 4, status: 'downloaded', uncollectStatus: 'uncollected' },
   ];
 
   assert.deepEqual(
