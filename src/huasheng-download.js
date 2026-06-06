@@ -10,6 +10,7 @@ import { stdin as input, stdout as output } from 'node:process';
 const DEFAULT_OUT_DIR = path.join(os.homedir(), 'Desktop', 'hs-src');
 const DEFAULT_PROFILE_DIR = path.resolve('.browser-profile');
 const DEFAULT_STOP_AFTER_EMPTY_SCROLLS = 3;
+const MAX_COLLECTION_DOWNLOAD_ATTEMPTS = 2;
 const MATERIAL_CONTAINER_SELECTOR = '.ClipChoiceList_contentWrap__Ii6jf';
 const MODAL_CLOSE_SELECTOR = 'button[aria-label="关闭"]';
 const COLLECT_ICON_SELECTOR = '[class*="ClipChoiceItem_collectIconWrap__"]';
@@ -133,6 +134,75 @@ export function collectionCardSignature({ src, cardText = '' }) {
     coverKey: materialSourceKey(src),
     cardText: String(cardText).replace(/\s+/g, ' ').trim(),
   };
+}
+
+export function nextCollectionMaterialNumber(fileNames) {
+  let maxNumber = 0;
+  for (const fileName of fileNames) {
+    const match = /^素材(\d+)\.mp4$/i.exec(fileName);
+    if (!match) continue;
+    maxNumber = Math.max(maxNumber, Number(match[1]));
+  }
+  return maxNumber + 1;
+}
+
+export function assignCollectionMaterialNumbers(materials, startNumber) {
+  return materials.map((material, index) => ({
+    ...material,
+    materialNumber: startNumber + index,
+  }));
+}
+
+export function remainingCollectionLimit(limit, downloadedCount) {
+  return limit ? Math.max(0, limit - downloadedCount) : 0;
+}
+
+export function successfulMaterialKeys(records) {
+  return new Set(records
+    .filter((record) => record.status === 'downloaded' && record.sourceKey)
+    .map((record) => record.sourceKey));
+}
+
+export function collectionMaterialsForPass(materials, {
+  downloadedVideoKeys,
+  downloadAttempts,
+  maxAttempts = MAX_COLLECTION_DOWNLOAD_ATTEMPTS,
+  limit = 0,
+}) {
+  const retryable = materials.filter((material) => (
+    !downloadedVideoKeys.has(material.key)
+    && (downloadAttempts.get(material.key) || 0) < maxAttempts
+  ));
+  return limit ? retryable.slice(0, limit) : retryable;
+}
+
+export function shouldContinueCollectionLoop({
+  successfulDownloadCount,
+  uncollectedCount,
+  hasRetryableVisibleMaterial,
+}) {
+  return successfulDownloadCount > 0
+    || uncollectedCount > 0
+    || hasRetryableVisibleMaterial;
+}
+
+export async function writeFileExclusive(filePath, body) {
+  await fs.writeFile(filePath, body, { flag: 'wx' });
+}
+
+export async function writeCollectionVideo(outDir, body, startNumber) {
+  let materialNumber = startNumber;
+  while (true) {
+    const filename = `素材${pad2(materialNumber)}.mp4`;
+    const filePath = path.join(outDir, filename);
+    try {
+      await writeFileExclusive(filePath, body);
+      return { materialNumber, filename, filePath };
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      materialNumber += 1;
+    }
+  }
 }
 
 export function shouldUncollectMaterial({ tab, status, dryRun, uncollectStatus }) {
@@ -467,7 +537,7 @@ async function extractCollectionMaterials(page, args) {
   await materialContainer(page);
 
   return extractVisibleMaterials(page, {
-    limit: args.limitPerScene,
+    limit: 0,
     sceneNumber: null,
     logPrefix: '收藏',
     recovery: null,
@@ -755,10 +825,6 @@ function shortUrl(url) {
 }
 
 async function downloadMaterial(context, item, outDir, referer) {
-  const filename = item.sceneNumber
-    ? `分镜${pad2(item.sceneNumber)}_素材${pad2(item.materialNumber)}.mp4`
-    : `素材${pad2(item.materialNumber)}.mp4`;
-  const filePath = path.join(outDir, filename);
   const response = await context.request.get(item.url, {
     timeout: 120000,
     headers: {
@@ -771,8 +837,15 @@ async function downloadMaterial(context, item, outDir, referer) {
     throw new Error(`HTTP ${response.status()} ${response.statusText()}`);
   }
   const body = await response.body();
-  await fs.writeFile(filePath, body);
-  return { filename, filePath, bytes: body.byteLength };
+  if (!item.sceneNumber) {
+    const result = await writeCollectionVideo(outDir, body, item.materialNumber);
+    return { ...result, bytes: body.byteLength };
+  }
+
+  const filename = `分镜${pad2(item.sceneNumber)}_素材${pad2(item.materialNumber)}.mp4`;
+  const filePath = path.join(outDir, filename);
+  await writeFileExclusive(filePath, body);
+  return { materialNumber: item.materialNumber, filename, filePath, bytes: body.byteLength };
 }
 
 async function cleanupDownloadedCollections({
@@ -787,7 +860,7 @@ async function cleanupDownloadedCollections({
     tab: args.tab,
     dryRun: args.dryRun,
   });
-  if (!queue.length) return;
+  if (!queue.length) return { attempted: 0, uncollected: 0 };
 
   console.log(`\n[收藏] 下载阶段已完成，开始取消 ${queue.length} 个已下载素材的收藏`);
   try {
@@ -805,13 +878,15 @@ async function cleanupDownloadedCollections({
     await writeJson(manifestPath, manifest);
     await writeJson(failuresPath, failures);
     console.warn(`[收藏] 取消收藏阶段未启动: ${error.message}`);
-    return;
+    return { attempted: queue.length, uncollected: 0 };
   }
 
+  let uncollectedCount = 0;
   for (const record of queue) {
     try {
       await uncollectMaterialWithRecovery(page, record, args);
       record.uncollectStatus = 'uncollected';
+      uncollectedCount += 1;
       console.log(`[收藏] 已取消收藏 素材${pad2(record.materialNumber)}`);
     } catch (error) {
       record.uncollectStatus = 'failed';
@@ -827,6 +902,7 @@ async function cleanupDownloadedCollections({
     await writeJson(manifestPath, manifest);
     await writeJson(failuresPath, failures);
   }
+  return { attempted: queue.length, uncollected: uncollectedCount };
 }
 
 async function main() {
@@ -859,41 +935,67 @@ async function main() {
     if (args.tab === '收藏') {
       let passCount = 0;
       const downloadedVideoKeys = new Set();
+      const downloadAttempts = new Map();
+      const existingFileNames = await fs.readdir(args.outDir);
+      let nextMaterialNumber = nextCollectionMaterialNumber(existingFileNames);
+      let downloadedCount = 0;
+
+      console.log(`[收藏] 新素材将从 素材${pad2(nextMaterialNumber)}.mp4 开始编号`);
 
       while (true) {
+        const remainingLimit = remainingCollectionLimit(args.limitPerScene, downloadedCount);
+        if (args.limitPerScene && remainingLimit === 0) {
+          console.log(`[收藏] 已达到本次运行上限 ${args.limitPerScene} 个素材`);
+          break;
+        }
+
         passCount += 1;
         console.log(`\n[收藏] === 第 ${passCount} 轮提取 ===`);
 
         const materials = await extractCollectionMaterials(page, args);
-
-        const newMaterials = materials.filter((m) => !downloadedVideoKeys.has(m.key));
-        if (materials.length > newMaterials.length) {
-          console.log(`[收藏] 跳过 ${materials.length - newMaterials.length} 个已下载的素材`);
-        }
-
-        if (!newMaterials.length) {
-          console.log('[收藏] 收藏列表已清空，没有更多素材');
-          break;
-        }
-
-        console.log(`[收藏] 第 ${passCount} 轮发现 ${newMaterials.length} 个新素材`);
-        for (const m of newMaterials) {
-          downloadedVideoKeys.add(m.key);
-        }
-
-        await processMaterials({
-          materials: newMaterials,
-          context,
-          args,
-          manifest,
-          failures,
-          manifestPath,
-          failuresPath,
-          referer: args.url,
-          label: '收藏',
+        const selectedMaterials = collectionMaterialsForPass(materials, {
+          downloadedVideoKeys,
+          downloadAttempts,
+          limit: remainingLimit,
         });
+        if (materials.length > selectedMaterials.length) {
+          console.log(`[收藏] 跳过 ${materials.length - selectedMaterials.length} 个已完成、已耗尽重试或超出上限的素材`);
+        }
+
+        let processedRecords = [];
+        let successfulDownloadCount = 0;
+        if (selectedMaterials.length) {
+          console.log(`[收藏] 第 ${passCount} 轮处理 ${selectedMaterials.length} 个素材`);
+          for (const material of selectedMaterials) {
+            downloadAttempts.set(material.key, (downloadAttempts.get(material.key) || 0) + 1);
+          }
+
+          const numberedMaterials = assignCollectionMaterialNumbers(selectedMaterials, nextMaterialNumber);
+          numberedMaterials.extractionFailures = materials.extractionFailures;
+          processedRecords = await processMaterials({
+            materials: numberedMaterials,
+            context,
+            args,
+            manifest,
+            failures,
+            manifestPath,
+            failuresPath,
+            referer: args.url,
+            label: '收藏',
+          });
+
+          const successfulKeys = successfulMaterialKeys(processedRecords);
+          for (const key of successfulKeys) downloadedVideoKeys.add(key);
+          successfulDownloadCount = successfulKeys.size;
+          downloadedCount += successfulDownloadCount;
+          nextMaterialNumber = processedRecords.reduce(
+            (next, record) => Math.max(next, (record.materialNumber || 0) + 1),
+            nextMaterialNumber + numberedMaterials.length
+          );
+        }
+
         await writeJson(manifestPath, manifest);
-        await cleanupDownloadedCollections({
+        const cleanupResult = await cleanupDownloadedCollections({
           page,
           args,
           manifest,
@@ -901,6 +1003,32 @@ async function main() {
           manifestPath,
           failuresPath,
         });
+
+        if (args.dryRun) {
+          console.log('[收藏] dry-run 提取完成');
+          break;
+        }
+        if (args.limitPerScene && downloadedCount >= args.limitPerScene) {
+          console.log(`[收藏] 已达到本次运行上限 ${args.limitPerScene} 个素材`);
+          break;
+        }
+        if (!materials.length) {
+          console.log('[收藏] 收藏列表已清空，没有更多素材');
+          break;
+        }
+
+        const hasRetryableVisibleMaterial = materials.some((material) => (
+          !downloadedVideoKeys.has(material.key)
+          && (downloadAttempts.get(material.key) || 0) < MAX_COLLECTION_DOWNLOAD_ATTEMPTS
+        ));
+        if (!shouldContinueCollectionLoop({
+          successfulDownloadCount,
+          uncollectedCount: cleanupResult.uncollected,
+          hasRetryableVisibleMaterial,
+        })) {
+          console.log('[收藏] 当前可见素材均已处理，结束本次运行');
+          break;
+        }
       }
     } else {
       const scenes = await discoverScenes(page, args);
@@ -952,6 +1080,7 @@ async function main() {
 }
 
 async function processMaterials({ materials, context, args, manifest, failures, manifestPath, failuresPath, referer, label }) {
+  const processedRecords = [];
   if (materials.extractionFailures?.length) {
     failures.push(...materials.extractionFailures);
     await writeJson(failuresPath, failures);
@@ -959,7 +1088,7 @@ async function processMaterials({ materials, context, args, manifest, failures, 
   if (!materials.length) {
     failures.push({ sceneNumber: null, label, reason: '未发现素材视频 URL' });
     await writeJson(failuresPath, failures);
-    return;
+    return processedRecords;
   }
 
   for (const item of materials) {
@@ -967,6 +1096,7 @@ async function processMaterials({ materials, context, args, manifest, failures, 
       sceneNumber: item.sceneNumber,
       materialNumber: item.materialNumber,
       sourceUrl: item.url,
+      sourceKey: item.key || materialUrlKey(item.url),
       status: args.dryRun ? 'dry-run' : 'pending',
     };
     if (args.tab === '收藏') {
@@ -978,6 +1108,7 @@ async function processMaterials({ materials, context, args, manifest, failures, 
       if (!args.dryRun) {
         const result = await downloadMaterial(context, item, args.outDir, referer);
         Object.assign(record, {
+          materialNumber: result.materialNumber,
           status: 'downloaded',
           filename: result.filename,
           filePath: result.filePath,
@@ -993,9 +1124,11 @@ async function processMaterials({ materials, context, args, manifest, failures, 
     }
 
     manifest.items.push(record);
+    processedRecords.push(record);
     await writeJson(manifestPath, manifest);
     await writeJson(failuresPath, failures);
   }
+  return processedRecords;
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
