@@ -2,9 +2,9 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** 收藏模式下，每个视频文件下载成功后精确点击对应素材卡片的星标取消收藏；下载失败和 `--dry-run` 不修改收藏状态。
+**Goal:** 收藏模式下先完成全部素材下载，再由独立后处理模块批量取消本轮成功下载素材的收藏；下载失败和 `--dry-run` 不修改收藏状态。
 
-**Architecture:** 保留现有“先提取全部 URL，再统一下载”的结构。提取阶段为收藏素材保存稳定的卡片签名；下载阶段通过一个收藏模式专用回调，从列表顶部滚动查找匹配卡片、点击卡片内部星标并确认卡片消失。匹配不唯一、定位失败或确认失败时只记录取消收藏失败，不影响已下载文件和后续素材。
+**Architecture:** 保留现有“先提取全部 URL，再统一下载”的结构，并把取消收藏实现为下载完成后的独立后处理器。下载模块只负责更新 manifest 的下载状态；它完全结束后，后处理器从本次 manifest 中筛选 `downloaded` 条目形成清理队列，再从列表顶部滚动查找匹配卡片、点击卡片内部星标并确认卡片消失。匹配不唯一、定位失败或确认失败时只记录取消收藏失败，不改变下载结果。
 
 **Tech Stack:** Node.js ESM、Playwright、`node:test`、`node:assert/strict`
 
@@ -45,7 +45,7 @@ test('materialSourceKey normalizes image and CSS background sources', () => {
   );
 });
 
-test('shouldUncollectMaterial only allows successful collection downloads', () => {
+test('shouldUncollectMaterial only selects successful collection downloads', () => {
   assert.equal(shouldUncollectMaterial({ tab: '收藏', status: 'downloaded', dryRun: false }), true);
   assert.equal(shouldUncollectMaterial({ tab: '收藏', status: 'failed', dryRun: false }), false);
   assert.equal(shouldUncollectMaterial({ tab: '收藏', status: 'dry-run', dryRun: true }), false);
@@ -310,38 +310,22 @@ git add src/huasheng-download.js
 git commit -m "feat: locate and uncollect material cards"
 ```
 
-### Task 4: 在下载成功路径接入取消收藏并记录状态
+### Task 4: 建立独立的下载后取消收藏阶段
 
 **Files:**
 - Modify: `src/huasheng-download.js:589-685`
 - Test: `test/huasheng-download.test.js`
 
-**Step 1: 给处理函数增加取消收藏回调**
+**Step 1: 保持下载处理器职责单一**
 
-修改签名：
+`processMaterials` 不接收 page、取消收藏回调或星标相关参数。它继续只负责：
 
-```js
-async function processMaterials({
-  materials,
-  context,
-  args,
-  manifest,
-  failures,
-  manifestPath,
-  failuresPath,
-  referer,
-  label,
-  uncollectDownloaded,
-}) {
-```
+- 下载每条素材。
+- 设置 `status`、文件路径和字节数。
+- 记录下载失败。
+- 将每条结果写入 manifest。
 
-收藏模式传入：
-
-```js
-uncollectDownloaded: (item) => uncollectMaterialWithRecovery(page, item, args),
-```
-
-推荐模式不传该回调。
+不得在 `downloadMaterial` 成功后立即点击星标。
 
 **Step 2: 初始化收藏清理状态**
 
@@ -353,41 +337,135 @@ uncollectStatus: 'skipped',
 
 推荐模式的 manifest 结构保持不变。
 
-**Step 3: 下载成功后执行取消收藏**
+**Step 3: 实现取消收藏队列构造函数**
 
-在 `downloadMaterial` 成功并将 `record.status` 设为 `downloaded` 后执行：
+增加并导出纯函数：
 
 ```js
-if (shouldUncollectMaterial({
-  tab: args.tab,
-  status: record.status,
-  dryRun: args.dryRun,
-})) {
-  try {
-    await uncollectDownloaded(item);
-    record.uncollectStatus = 'uncollected';
-    console.log(`[${label}] 已取消收藏 素材${pad2(item.materialNumber)}`);
-  } catch (error) {
-    record.uncollectStatus = 'failed';
-    record.uncollectError = error.message;
-    failures.push({
-      ...record,
-      failureType: 'uncollect',
-      reason: error.message,
-    });
-    console.warn(`[${label}] 取消收藏失败 素材${pad2(item.materialNumber)}: ${error.message}`);
+export function collectionCleanupQueue(items, { tab, dryRun }) {
+  if (tab !== '收藏' || dryRun) return [];
+  return items.filter((item) => shouldUncollectMaterial({
+    tab,
+    status: item.status,
+    dryRun,
+  }));
+}
+```
+
+在测试中增加：
+
+```js
+test('collectionCleanupQueue only returns downloaded collection records', () => {
+  const items = [
+    { materialNumber: 1, status: 'downloaded' },
+    { materialNumber: 2, status: 'failed' },
+    { materialNumber: 3, status: 'dry-run' },
+  ];
+  assert.deepEqual(
+    collectionCleanupQueue(items, { tab: '收藏', dryRun: false }),
+    [items[0]]
+  );
+  assert.deepEqual(
+    collectionCleanupQueue(items, { tab: '收藏', dryRun: true }),
+    []
+  );
+  assert.deepEqual(
+    collectionCleanupQueue(items, { tab: '推荐', dryRun: false }),
+    []
+  );
+});
+```
+
+先运行 `npm test` 确认失败，再实现函数并确认通过。
+
+**Step 4: 实现独立后处理器**
+
+增加：
+
+```js
+async function cleanupDownloadedCollections({
+  page,
+  args,
+  manifest,
+  failures,
+  manifestPath,
+  failuresPath,
+}) {
+  const queue = collectionCleanupQueue(manifest.items, {
+    tab: args.tab,
+    dryRun: args.dryRun,
+  });
+
+  if (!queue.length) return;
+
+  await openCollectionMaterialList(page, args);
+
+  for (const record of queue) {
+    try {
+      await uncollectMaterialWithRecovery(page, record, args);
+      record.uncollectStatus = 'uncollected';
+      console.log(`[收藏] 已取消收藏 素材${pad2(record.materialNumber)}`);
+    } catch (error) {
+      record.uncollectStatus = 'failed';
+      record.uncollectError = error.message;
+      failures.push({
+        ...record,
+        failureType: 'uncollect',
+        reason: error.message,
+      });
+      console.warn(`[收藏] 取消收藏失败 素材${pad2(record.materialNumber)}: ${error.message}`);
+    }
+
+    await writeJson(manifestPath, manifest);
+    await writeJson(failuresPath, failures);
   }
 }
 ```
 
+提取阶段保存的 `collectionCard` 必须复制到 manifest record，确保后处理器只依赖 manifest 条目，不依赖下载函数内部的 item 对象。
+
+**Step 5: 在收藏下载全部结束后调用后处理器**
+
+收藏模式主流程必须严格按以下顺序：
+
+```js
+const materials = await extractCollectionMaterials(page, args);
+
+await processMaterials({
+  materials,
+  context,
+  args,
+  manifest,
+  failures,
+  manifestPath,
+  failuresPath,
+  referer: args.url,
+  label: '收藏',
+});
+
+await writeJson(manifestPath, manifest);
+
+await cleanupDownloadedCollections({
+  page,
+  args,
+  manifest,
+  failures,
+  manifestPath,
+  failuresPath,
+});
+```
+
+推荐模式不得调用 `cleanupDownloadedCollections`。
+
 约束：
 
+- `processMaterials` 完整处理完所有收藏素材后，才能进入后处理器。
 - 下载失败时保持 `uncollectStatus: "skipped"`。
-- `--dry-run` 时保持 `uncollectStatus: "skipped"`。
-- 取消收藏失败不能进入外层下载 `catch`，否则会错误地把成功下载改成 `failed`。
-- 在每条素材处理结束后统一写入 manifest 和 failures，确保清单含最终取消状态。
+- `--dry-run` 时整个后处理器直接返回。
+- 取消收藏失败不能把成功下载记录改成 `failed`。
+- 取消收藏模块异常不能回滚、删除或覆盖已下载文件。
 
-**Step 4: 增加汇总字段**
+**Step 6: 增加汇总字段**
 
 收藏模式下在 `manifest.summary` 增加：
 
@@ -396,7 +474,7 @@ uncollected: manifest.items.filter((item) => item.uncollectStatus === 'uncollect
 uncollectFailed: manifest.items.filter((item) => item.uncollectStatus === 'failed').length,
 ```
 
-**Step 5: 运行测试和语法检查**
+**Step 7: 运行测试和语法检查**
 
 Run:
 
@@ -407,7 +485,7 @@ npm run check
 
 Expected: 全部 PASS。
 
-**Step 6: 提交**
+**Step 8: 提交**
 
 ```bash
 git add src/huasheng-download.js test/huasheng-download.test.js
@@ -425,7 +503,7 @@ git commit -m "feat: uncollect successfully downloaded materials"
 在收藏模式说明中明确：
 
 ```markdown
-默认会点击“收藏”tab，不按分镜循环。每个素材文件下载成功后，脚本会点击对应卡片的星标取消收藏，避免下次重复下载。下载失败或使用 `--dry-run` 时会保留收藏。
+默认会点击“收藏”tab，不按分镜循环。脚本会先完成本轮全部下载，再批量取消成功下载素材的收藏，避免下次重复下载。下载失败或使用 `--dry-run` 时会保留收藏。
 ```
 
 **Step 2: 说明清单字段**
@@ -489,7 +567,7 @@ Expected:
 - manifest 中两条记录的 `status` 为 `dry-run`。
 - 两条记录的 `uncollectStatus` 为 `skipped`。
 
-**Step 3: 验证真实下载后取消收藏**
+**Step 3: 验证全部下载结束后再取消收藏**
 
 运行：
 
@@ -500,6 +578,7 @@ npm run download -- https://www.huasheng.cn/video/158889664548866 --limit 2
 Expected:
 
 - 两个文件成功写入 `/Users/liubo/Desktop/hs-src`。
+- 日志先连续出现全部“已下载”记录，之后才出现“已取消收藏”记录。
 - 对应卡片随后从收藏 tab 消失。
 - manifest 中 `status` 为 `downloaded`。
 - manifest 中 `uncollectStatus` 为 `uncollected`。
