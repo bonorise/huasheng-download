@@ -12,6 +12,7 @@ const DEFAULT_PROFILE_DIR = path.resolve('.browser-profile');
 const DEFAULT_STOP_AFTER_EMPTY_SCROLLS = 3;
 const MATERIAL_CONTAINER_SELECTOR = '.ClipChoiceList_contentWrap__Ii6jf';
 const MODAL_CLOSE_SELECTOR = 'button[aria-label="关闭"]';
+const COLLECT_ICON_SELECTOR = '[class*="ClipChoiceItem_collectIconWrap__"]';
 const SUPPORTED_TABS = new Set(['收藏', '推荐']);
 
 function parseArgs(argv) {
@@ -118,6 +119,33 @@ export function materialUrlKey(rawUrl) {
   } catch {
     return rawUrl;
   }
+}
+
+export function materialSourceKey(rawSource) {
+  const source = String(rawSource || '')
+    .trim()
+    .replace(/^url\((['"]?)(.*?)\1\)$/i, '$2');
+  return materialUrlKey(source);
+}
+
+export function collectionCardSignature({ src, cardText = '' }) {
+  return {
+    coverKey: materialSourceKey(src),
+    cardText: String(cardText).replace(/\s+/g, ' ').trim(),
+  };
+}
+
+export function shouldUncollectMaterial({ tab, status, dryRun }) {
+  return tab === '收藏' && status === 'downloaded' && !dryRun;
+}
+
+export function collectionCleanupQueue(items, { tab, dryRun }) {
+  if (tab !== '收藏' || dryRun) return [];
+  return items.filter((item) => shouldUncollectMaterial({
+    tab,
+    status: item.status,
+    dryRun,
+  }));
 }
 
 async function pauseForEnter(message) {
@@ -243,7 +271,7 @@ async function materialContainer(page) {
 }
 
 async function markVisibleMaterialCandidates(page, seenKeys) {
-  return page.evaluate(({ selector, seen }) => {
+  return page.evaluate(({ selector, collectIconSelector, seen }) => {
     const container = document.querySelector(selector);
     if (!container) return [];
 
@@ -262,6 +290,15 @@ async function markVisibleMaterialCandidates(page, seenKeys) {
       return rect;
     }
 
+    function collectionCardFor(el) {
+      let current = el;
+      while (current && current !== container) {
+        if (current.querySelector?.(collectIconSelector)) return current;
+        current = current.parentElement;
+      }
+      return null;
+    }
+
     for (const el of elements) {
       const rect = visibleRect(el);
       if (!rect) continue;
@@ -271,12 +308,14 @@ async function markVisibleMaterialCandidates(page, seenKeys) {
       const key = `${src}|${Math.round(rect.left)}|${Math.round(rect.top)}|${Math.round(rect.width)}x${Math.round(rect.height)}`;
       if (seenSet.has(key)) continue;
       const id = `hs_candidate_${Date.now()}_${candidates.length}`;
+      const card = collectionCardFor(el);
       el.setAttribute('data-hs-candidate-id', id);
       candidates.push({
         id,
         key,
         tag: el.tagName.toLowerCase(),
         src,
+        cardText: card?.textContent || '',
         x: Math.round(rect.left),
         y: Math.round(rect.top),
         width: Math.round(rect.width),
@@ -286,7 +325,11 @@ async function markVisibleMaterialCandidates(page, seenKeys) {
 
     candidates.sort((a, b) => (a.y - b.y) || (a.x - b.x));
     return candidates;
-  }, { selector: MATERIAL_CONTAINER_SELECTOR, seen: Array.from(seenKeys) });
+  }, {
+    selector: MATERIAL_CONTAINER_SELECTOR,
+    collectIconSelector: COLLECT_ICON_SELECTOR,
+    seen: Array.from(seenKeys),
+  });
 }
 
 async function visibleVideoSources(page) {
@@ -363,6 +406,14 @@ async function scrollMaterialList(page) {
   }, MATERIAL_CONTAINER_SELECTOR);
 }
 
+async function openCollectionMaterialList(page, args) {
+  await page.goto(args.url, { waitUntil: 'domcontentloaded', timeout: 60000 });
+  await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+  await openMaterialPanel(page);
+  await selectMaterialTab(page, '收藏');
+  await materialContainer(page);
+}
+
 async function extractSceneMaterials(page, sceneNumber, args) {
   const targetUrl = sceneUrl(args.url, sceneNumber);
   console.log(`\n[分镜 ${pad2(sceneNumber)}] 打开 ${targetUrl}`);
@@ -419,10 +470,17 @@ async function extractCollectionMaterials(page, args) {
     sceneNumber: null,
     logPrefix: '收藏',
     recovery: null,
+    includeCollectionSignature: true,
   });
 }
 
-async function extractVisibleMaterials(page, { limit, sceneNumber, logPrefix, recovery }) {
+async function extractVisibleMaterials(page, {
+  limit,
+  sceneNumber,
+  logPrefix,
+  recovery,
+  includeCollectionSignature = false,
+}) {
   const materials = [];
   const extractionFailures = [];
   const seenCandidateKeys = new Set();
@@ -465,6 +523,9 @@ async function extractVisibleMaterials(page, { limit, sceneNumber, logPrefix, re
             url: videoUrl,
             key: videoKey,
             candidate,
+            collectionCard: includeCollectionSignature
+              ? collectionCardSignature(candidate)
+              : undefined,
           });
           newVideosThisPass += 1;
           console.log(`[${logPrefix}] 捕获素材 ${pad2(materials.length)}: ${shortUrl(videoUrl)}`);
@@ -528,6 +589,141 @@ async function extractVisibleMaterials(page, { limit, sceneNumber, logPrefix, re
   return materials;
 }
 
+async function findCollectionCardOnCurrentView(page, signature) {
+  return page.evaluate(({
+    selector,
+    collectIconSelector,
+    coverKey,
+    cardText,
+  }) => {
+    const container = document.querySelector(selector);
+    if (!container) return { matchCount: 0, cardId: '' };
+
+    function sourceKey(rawSource) {
+      const source = String(rawSource || '')
+        .trim()
+        .replace(/^url\((['"]?)(.*?)\1\)$/i, '$2');
+      try {
+        const url = new URL(source);
+        return `${url.origin}${url.pathname}`;
+      } catch {
+        return source;
+      }
+    }
+
+    function normalizedText(value) {
+      return String(value || '').replace(/\s+/g, ' ').trim();
+    }
+
+    function collectionCardFor(el) {
+      let current = el;
+      while (current && current !== container) {
+        if (current.querySelector?.(collectIconSelector)) return current;
+        current = current.parentElement;
+      }
+      return null;
+    }
+
+    const cards = new Set();
+    const elements = container.querySelectorAll('img, [style*="background-image"], video, canvas');
+    for (const el of elements) {
+      const style = window.getComputedStyle(el);
+      const src = el.currentSrc || el.src || style.backgroundImage || '';
+      if (sourceKey(src) !== coverKey) continue;
+
+      const card = collectionCardFor(el);
+      if (!card) continue;
+      cards.add(card);
+    }
+
+    let matches = Array.from(cards);
+    if (matches.length > 1 && cardText) {
+      matches = matches.filter((card) => normalizedText(card.textContent) === cardText);
+    }
+    if (matches.length !== 1) {
+      return { matchCount: matches.length, cardId: '' };
+    }
+
+    const cardId = `hs_uncollect_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    matches[0].setAttribute('data-hs-collection-card-id', cardId);
+    return { matchCount: 1, cardId };
+  }, {
+    selector: MATERIAL_CONTAINER_SELECTOR,
+    collectIconSelector: COLLECT_ICON_SELECTOR,
+    coverKey: signature.coverKey,
+    cardText: signature.cardText,
+  });
+}
+
+async function resetMaterialListScroll(page) {
+  await page.evaluate((selector) => {
+    const container = document.querySelector(selector);
+    if (container) container.scrollTop = 0;
+  }, MATERIAL_CONTAINER_SELECTOR);
+  await page.waitForTimeout(300);
+}
+
+async function findCollectionCard(page, signature) {
+  if (!signature?.coverKey) {
+    throw new Error('收藏素材缺少封面定位特征');
+  }
+
+  await resetMaterialListScroll(page);
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const match = await findCollectionCardOnCurrentView(page, signature);
+    if (match.matchCount > 1) {
+      throw new Error('收藏卡片匹配不唯一');
+    }
+    if (match.matchCount === 1) {
+      return page.locator(`[data-hs-collection-card-id="${match.cardId}"]`).first();
+    }
+
+    const scroll = await scrollMaterialList(page);
+    if (scroll.missing || scroll.after === scroll.before) return null;
+    await page.waitForTimeout(300);
+  }
+
+  throw new Error('查找收藏卡片超过最大滚动次数');
+}
+
+async function uncollectMaterial(page, item) {
+  const card = await findCollectionCard(page, item.collectionCard);
+  if (!card) throw new Error('未找到对应收藏卡片');
+
+  const icon = card.locator(COLLECT_ICON_SELECTOR).first();
+  const visible = await icon.isVisible({ timeout: 2000 }).catch(() => false);
+  if (!visible) throw new Error('对应收藏卡片未找到星标按钮');
+
+  try {
+    await icon.click({ timeout: 3000 });
+  } catch (error) {
+    error.uncollectClickAttempted = true;
+    throw error;
+  }
+  await page.waitForTimeout(500);
+
+  const remaining = await findCollectionCard(page, item.collectionCard);
+  if (remaining) {
+    const error = new Error('点击星标后收藏卡片仍然存在');
+    error.uncollectClickAttempted = true;
+    throw error;
+  }
+}
+
+async function uncollectMaterialWithRecovery(page, item, args) {
+  try {
+    await uncollectMaterial(page, item);
+  } catch (firstError) {
+    if (firstError.uncollectClickAttempted) throw firstError;
+    await openCollectionMaterialList(page, args);
+    try {
+      await uncollectMaterial(page, item);
+    } catch (secondError) {
+      throw new Error(`取消收藏重试失败: ${firstError.message}; ${secondError.message}`);
+    }
+  }
+}
+
 function shortUrl(url) {
   try {
     const parsed = new URL(url);
@@ -557,6 +753,60 @@ async function downloadMaterial(context, item, outDir, referer) {
   const body = await response.body();
   await fs.writeFile(filePath, body);
   return { filename, filePath, bytes: body.byteLength };
+}
+
+async function cleanupDownloadedCollections({
+  page,
+  args,
+  manifest,
+  failures,
+  manifestPath,
+  failuresPath,
+}) {
+  const queue = collectionCleanupQueue(manifest.items, {
+    tab: args.tab,
+    dryRun: args.dryRun,
+  });
+  if (!queue.length) return;
+
+  console.log(`\n[收藏] 下载阶段已完成，开始取消 ${queue.length} 个已下载素材的收藏`);
+  try {
+    await openCollectionMaterialList(page, args);
+  } catch (error) {
+    for (const record of queue) {
+      record.uncollectStatus = 'failed';
+      record.uncollectError = `无法打开收藏列表: ${error.message}`;
+      failures.push({
+        ...record,
+        failureType: 'uncollect',
+        reason: record.uncollectError,
+      });
+    }
+    await writeJson(manifestPath, manifest);
+    await writeJson(failuresPath, failures);
+    console.warn(`[收藏] 取消收藏阶段未启动: ${error.message}`);
+    return;
+  }
+
+  for (const record of queue) {
+    try {
+      await uncollectMaterialWithRecovery(page, record, args);
+      record.uncollectStatus = 'uncollected';
+      console.log(`[收藏] 已取消收藏 素材${pad2(record.materialNumber)}`);
+    } catch (error) {
+      record.uncollectStatus = 'failed';
+      record.uncollectError = error.message;
+      failures.push({
+        ...record,
+        failureType: 'uncollect',
+        reason: error.message,
+      });
+      console.warn(`[收藏] 取消收藏失败 素材${pad2(record.materialNumber)}: ${error.message}`);
+    }
+
+    await writeJson(manifestPath, manifest);
+    await writeJson(failuresPath, failures);
+  }
 }
 
 async function main() {
@@ -599,6 +849,15 @@ async function main() {
         referer: args.url,
         label: '收藏',
       });
+      await writeJson(manifestPath, manifest);
+      await cleanupDownloadedCollections({
+        page,
+        args,
+        manifest,
+        failures,
+        manifestPath,
+        failuresPath,
+      });
     } else {
       const scenes = await discoverScenes(page, args);
       console.log(`将处理 ${scenes.length} 个分镜: ${scenes.map((n) => pad2(n)).join(', ')}`);
@@ -632,6 +891,12 @@ async function main() {
       failed: failures.length,
       dryRun: args.dryRun,
     };
+    if (args.tab === '收藏') {
+      manifest.summary.uncollected = manifest.items
+        .filter((item) => item.uncollectStatus === 'uncollected').length;
+      manifest.summary.uncollectFailed = manifest.items
+        .filter((item) => item.uncollectStatus === 'failed').length;
+    }
     await writeJson(manifestPath, manifest);
     await writeJson(failuresPath, failures);
     await context.close();
@@ -660,6 +925,10 @@ async function processMaterials({ materials, context, args, manifest, failures, 
       sourceUrl: item.url,
       status: args.dryRun ? 'dry-run' : 'pending',
     };
+    if (args.tab === '收藏') {
+      record.collectionCard = item.collectionCard;
+      record.uncollectStatus = 'skipped';
+    }
 
     try {
       if (!args.dryRun) {

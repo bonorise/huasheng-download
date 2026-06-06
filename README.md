@@ -18,7 +18,7 @@ npm_config_arch=arm64 npm_config_platform=darwin npm install
 npm run download -- https://www.huasheng.cn/video/158889664548866
 ```
 
-默认会点击“收藏”tab，不按分镜循环。适合你先手动浏览素材并收藏需要下载的素材。
+默认会点击“收藏”tab，不按分镜循环。脚本会先完成本轮全部下载，再批量取消成功下载素材的收藏，避免下次重复下载。下载失败或使用 `--dry-run` 时会保留收藏。
 
 如果要按分镜下载“推荐”素材：
 
@@ -64,6 +64,12 @@ npm run download -- https://www.huasheng.cn/video/158889664548866 --count 43
 
 - `manifest.json`：所有素材的来源、输出文件和状态。
 - `failures.json`：失败分镜或失败素材记录。
+
+收藏模式的每条记录还包含 `uncollectStatus`：
+
+- `uncollected`：下载成功，并已取消收藏。
+- `failed`：下载成功，但取消收藏失败。
+- `skipped`：下载失败或使用了 `--dry-run`，未执行取消收藏。
 
 ## 常用选项
 
