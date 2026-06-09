@@ -878,8 +878,6 @@ export async function downloadCollections(args, { page: existingPage, context: e
     ownBrowser = true;
   }
 
-  await ensureDir(args.outDir);
-
   const manifestPath = path.join(args.outDir, 'manifest.json');
   const failuresPath = path.join(args.outDir, 'failures.json');
   const manifest = {
@@ -893,6 +891,8 @@ export async function downloadCollections(args, { page: existingPage, context: e
   const failures = [];
 
   try {
+    await ensureDir(args.outDir);
+
     if (args.tab === '收藏') {
       let passCount = 0;
       const downloadedVideoKeys = new Set();
@@ -1030,8 +1030,8 @@ export async function downloadCollections(args, { page: existingPage, context: e
       manifest.summary.uncollectFailed = manifest.items
         .filter((item) => item.uncollectStatus === 'failed').length;
     }
-    await writeJson(manifestPath, manifest);
-    await writeJson(failuresPath, failures);
+    await writeJson(manifestPath, manifest).catch(() => {});
+    await writeJson(failuresPath, failures).catch(() => {});
     if (ownBrowser) await context.close();
   }
 

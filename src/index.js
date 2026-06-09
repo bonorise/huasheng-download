@@ -8,7 +8,6 @@ import {
   DEFAULT_PROFILE_DIR,
   ensureDir,
   launchBrowser,
-  writeJson,
 } from './shared.js';
 
 const COLLECTION_URL = 'https://www.huasheng.cn/video/158889664548866';
@@ -79,17 +78,6 @@ async function main() {
         dryRun: rawArgs.dryRun,
         tab: rawArgs.tab,
       };
-
-      const manifestPath = path.join(rawArgs.outDir, 'manifest.json');
-      const manifest = {
-        startedAt: new Date().toISOString(),
-        projectUrl: COLLECTION_URL,
-        outDir: rawArgs.outDir,
-        profileDir: rawArgs.profileDir,
-        tab: collectionArgs.tab,
-        items: [],
-      };
-      await writeJson(manifestPath, manifest);
 
       await downloadCollections(collectionArgs, { page, context });
     }

@@ -253,7 +253,7 @@ export async function downloadMGAnimations({ page, context, args }) {
 
   let downloaded = 0;
   for (const item of mgMaterials) {
-    const filename = `MG动画_${pad2(item.mgNumber)}.mp4`;
+    const filename = await mgFilename(item.mgNumber);
     const record = {
       type: 'mg',
       mgNumber: item.mgNumber,
@@ -278,12 +278,12 @@ export async function downloadMGAnimations({ page, context, args }) {
       record.status = 'failed';
       record.error = error.message;
       failures.push({ ...record, type: 'mg-download' });
+      await writeJson(failuresPath, failures);
       console.warn(`[MG] 下载失败 ${filename}: ${error.message}`);
     }
 
     manifest.items.push(record);
     await writeJson(manifestPath, manifest);
-    await writeJson(failuresPath, failures);
   }
 
   return { downloaded, failed: extractionFailures.length + failures.filter((f) => f.type === 'mg-download').length };
