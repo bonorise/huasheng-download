@@ -1,14 +1,23 @@
 #!/usr/bin/env node
 
-import { chromium } from 'playwright';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import os from 'node:os';
-import { createInterface } from 'node:readline/promises';
-import { stdin as input, stdout as output } from 'node:process';
+import {
+  DEFAULT_OUT_DIR,
+  DEFAULT_PROFILE_DIR,
+  ensureDir,
+  isProbablyLoggedOut,
+  launchBrowser,
+  materialUrlKey,
+  pad2,
+  pauseForEnter,
+  shortUrl,
+  writeFileExclusive,
+  writeJson,
+} from './shared.js';
 
-const DEFAULT_OUT_DIR = path.join(os.homedir(), 'Desktop', 'hs-src');
-const DEFAULT_PROFILE_DIR = path.resolve('.browser-profile');
+export { materialUrlKey, pad2, writeFileExclusive };
+
 const DEFAULT_STOP_AFTER_EMPTY_SCROLLS = 3;
 const MAX_COLLECTION_DOWNLOAD_ATTEMPTS = 2;
 const MATERIAL_CONTAINER_SELECTOR = '.ClipChoiceList_contentWrap__Ii6jf';
@@ -54,8 +63,7 @@ function parseArgs(argv) {
   }
 
   if (!args.url) {
-    printHelp();
-    throw new Error('请提供华声项目 URL。');
+    args.url = 'https://www.huasheng.cn/video/158889664548866';
   }
   if (!Number.isFinite(args.slowMo) || args.slowMo < 0) args.slowMo = 80;
   if (args.count !== null && (!Number.isInteger(args.count) || args.count < 1)) {
@@ -109,18 +117,6 @@ export function sceneNumberFromUrl(rawUrl) {
   return Number.isInteger(clipNumber) && clipNumber >= 0 ? clipNumber + 1 : 1;
 }
 
-export function pad2(number) {
-  return String(number).padStart(2, '0');
-}
-
-export function materialUrlKey(rawUrl) {
-  try {
-    const url = new URL(rawUrl);
-    return `${url.origin}${url.pathname}`;
-  } catch {
-    return rawUrl;
-  }
-}
 
 export function materialSourceKey(rawSource) {
   const source = String(rawSource || '')
@@ -186,10 +182,6 @@ export function shouldContinueCollectionLoop({
     || hasRetryableVisibleMaterial;
 }
 
-export async function writeFileExclusive(filePath, body) {
-  await fs.writeFile(filePath, body, { flag: 'wx' });
-}
-
 export async function writeCollectionVideo(outDir, body, startNumber) {
   let materialNumber = startNumber;
   while (true) {
@@ -217,28 +209,6 @@ export function collectionCleanupQueue(items, { tab, dryRun }) {
     dryRun,
     uncollectStatus: item.uncollectStatus,
   }));
-}
-
-async function pauseForEnter(message) {
-  const rl = createInterface({ input, output });
-  try {
-    await rl.question(`${message}\n完成后按回车继续...`);
-  } finally {
-    rl.close();
-  }
-}
-
-async function ensureDir(dir) {
-  await fs.mkdir(dir, { recursive: true });
-}
-
-async function writeJson(file, data) {
-  await fs.writeFile(file, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
-}
-
-async function isProbablyLoggedOut(page) {
-  const text = await page.locator('body').innerText({ timeout: 5000 }).catch(() => '');
-  return /登录|验证码|手机号|微信扫码|未登录/.test(text) && !/分镜|素材|推荐/.test(text);
 }
 
 async function clickFirstVisibleText(page, labels, timeout = 2500) {
@@ -814,16 +784,6 @@ async function uncollectMaterialWithRecovery(page, item, args) {
   }
 }
 
-function shortUrl(url) {
-  try {
-    const parsed = new URL(url);
-    const file = parsed.pathname.split('/').pop();
-    return `${parsed.origin}/.../${file}`;
-  } catch {
-    return url.slice(0, 96);
-  }
-}
-
 async function downloadMaterial(context, item, outDir, referer) {
   const response = await context.request.get(item.url, {
     timeout: 120000,
@@ -905,8 +865,19 @@ async function cleanupDownloadedCollections({
   return { attempted: queue.length, uncollected: uncollectedCount };
 }
 
-async function main() {
-  const args = parseArgs(process.argv.slice(2));
+export async function downloadCollections(args, { page: existingPage, context: existingContext } = {}) {
+  let context, page;
+  let ownBrowser = false;
+  if (existingContext) {
+    context = existingContext;
+    page = existingPage;
+  } else {
+    const launched = await launchBrowser(args);
+    context = launched.context;
+    page = launched.page;
+    ownBrowser = true;
+  }
+
   await ensureDir(args.outDir);
 
   const manifestPath = path.join(args.outDir, 'manifest.json');
@@ -920,16 +891,6 @@ async function main() {
     items: [],
   };
   const failures = [];
-
-  const context = await chromium.launchPersistentContext(args.profileDir, {
-    headless: args.headless,
-    slowMo: args.slowMo,
-    viewport: { width: 1440, height: 1000 },
-    acceptDownloads: true,
-    locale: 'zh-CN',
-  });
-
-  const page = context.pages()[0] || await context.newPage();
 
   try {
     if (args.tab === '收藏') {
@@ -1071,12 +1032,8 @@ async function main() {
     }
     await writeJson(manifestPath, manifest);
     await writeJson(failuresPath, failures);
-    await context.close();
+    if (ownBrowser) await context.close();
   }
-
-  console.log(`\n完成。清单: ${manifestPath}`);
-  console.log(`失败记录: ${failuresPath}`);
-  console.log(`输出目录: ${args.outDir}`);
 }
 
 async function processMaterials({ materials, context, args, manifest, failures, manifestPath, failuresPath, referer, label }) {
@@ -1132,7 +1089,8 @@ async function processMaterials({ materials, context, args, manifest, failures, 
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  main().catch((error) => {
+  const args = parseArgs(process.argv.slice(2));
+  downloadCollections(args).catch((error) => {
     console.error(`\n错误: ${error.message}`);
     process.exitCode = 1;
   });
