@@ -1,15 +1,15 @@
 {
   "name": "huasheng-download",
   "version": "1.0.0",
-  "description": "Download recommended storyboard video assets from huasheng.cn projects.",
+  "description": "Download storyboard video and MG animation assets from huasheng.cn projects.",
   "type": "module",
   "bin": {
-    "huasheng-download": "./src/huasheng-download.js"
+    "huasheng-download": "./src/index.js"
   },
-  "main": "src/huasheng-download.js",
+  "main": "src/index.js",
   "scripts": {
-    "download": "node ./src/huasheng-download.js",
-    "check": "node --check ./src/huasheng-download.js",
+    "download": "node ./src/index.js",
+    "check": "node --check ./src/index.js && node --check ./src/shared.js && node --check ./src/huasheng-download.js && node --check ./src/mg-download.js",
     "test": "node --test"
   },
   "keywords": [],
