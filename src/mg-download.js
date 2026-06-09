@@ -63,8 +63,8 @@ function mgAnimationNumber(text) {
   return match ? Number(match[1]) : 0;
 }
 
-export async function mgFilename(sceneNumber, mgNumber) {
-  return `MG动画_Scene-${pad2(sceneNumber)}_${pad2(mgNumber)}.mp4`;
+export async function mgFilename(mgNumber) {
+  return `MG动画_${pad2(mgNumber)}.mp4`;
 }
 
 async function collectClipCards(page) {
@@ -87,11 +87,8 @@ async function collectClipCards(page) {
         if (!clipId || seenSet.has(clipId)) continue;
         seenSet.add(clipId);
         const rect = el.getBoundingClientRect();
-        const text = el.textContent || '';
-        const sceneMatch = text.match(/分镜\s*(\d+)/);
         result.push({
           clipId,
-          sceneNumber: sceneMatch ? Number(sceneMatch[1]) : 0,
           x: Math.round(rect.left),
           y: Math.round(rect.top),
         });
@@ -119,7 +116,7 @@ async function collectClipCards(page) {
     await page.waitForTimeout(600);
   }
 
-  cards.sort((a, b) => a.sceneNumber - b.sceneNumber || a.x - b.x);
+  cards.sort((a, b) => a.x - b.x);
   return cards;
 }
 
@@ -133,11 +130,6 @@ async function extractMGAnimations(page, args) {
 
   let processedCount = 0;
   for (const card of cards) {
-    if (!card.sceneNumber) {
-      console.warn(`[MG] 卡片 ${card.clipId} 无法解析分镜序号，跳过`);
-      continue;
-    }
-
     const cardLocator = page.locator(`[class*="video-clip-${card.clipId}"]`).first();
     await cardLocator.scrollIntoViewIfNeeded().catch(() => {});
     await page.waitForTimeout(300);
@@ -170,16 +162,14 @@ async function extractMGAnimations(page, args) {
           const exists = materials.some((m) => m.key === key);
           if (!exists) {
             materials.push({
-              sceneNumber: card.sceneNumber,
               mgNumber,
               url: movSrc,
               key,
             });
-            console.log(`[MG] 捕获 Scene-${pad2(card.sceneNumber)} MG动画 ${pad2(mgNumber)}: ${shortUrl(movSrc)}`);
+            console.log(`[MG] 捕获 MG动画 ${pad2(mgNumber)}: ${shortUrl(movSrc)}`);
           }
         } else {
           failures.push({
-            sceneNumber: card.sceneNumber,
             mgNumber,
             clipId: card.clipId,
             reason: movSrc ? `非法的 data-mov-src: ${shortUrl(movSrc)}` : '未找到 data-mov-src',
@@ -187,12 +177,11 @@ async function extractMGAnimations(page, args) {
         }
       } catch (error) {
         failures.push({
-          sceneNumber: card.sceneNumber,
           mgNumber,
           clipId: card.clipId,
           reason: error.message,
         });
-        console.warn(`[MG] Scene-${pad2(card.sceneNumber)} MG动画 ${pad2(mgNumber)} 提取失败: ${error.message}`);
+        console.warn(`[MG] MG动画 ${pad2(mgNumber)} 提取失败: ${error.message}`);
       }
     }
 
@@ -264,10 +253,9 @@ export async function downloadMGAnimations({ page, context, args }) {
 
   let downloaded = 0;
   for (const item of mgMaterials) {
-    const filename = `MG动画_Scene-${pad2(item.sceneNumber)}_${pad2(item.mgNumber)}.mp4`;
+    const filename = `MG动画_${pad2(item.mgNumber)}.mp4`;
     const record = {
       type: 'mg',
-      sceneNumber: item.sceneNumber,
       mgNumber: item.mgNumber,
       sourceUrl: item.url,
       sourceKey: item.key,

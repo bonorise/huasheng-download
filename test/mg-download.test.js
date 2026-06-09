@@ -5,9 +5,9 @@ import { materialUrlKey, pad2 } from '../src/shared.js';
 import { mgFilename } from '../src/mg-download.js';
 
 test('mgFilename produces correct naming pattern', async () => {
-  assert.equal(await mgFilename(3, 1), 'MG动画_Scene-03_01.mp4');
-  assert.equal(await mgFilename(11, 5), 'MG动画_Scene-11_05.mp4');
-  assert.equal(await mgFilename(100, 12), 'MG动画_Scene-100_12.mp4');
+  assert.equal(await mgFilename(1), 'MG动画_01.mp4');
+  assert.equal(await mgFilename(5), 'MG动画_05.mp4');
+  assert.equal(await mgFilename(12), 'MG动画_12.mp4');
 });
 
 test('materialUrlKey dedupes MG video URLs across signed params', () => {
