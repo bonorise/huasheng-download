@@ -1034,6 +1034,10 @@ export async function downloadCollections(args, { page: existingPage, context: e
     await writeJson(failuresPath, failures);
     if (ownBrowser) await context.close();
   }
+
+  console.log(`\n完成。清单: ${manifestPath}`);
+  console.log(`失败记录: ${failuresPath}`);
+  console.log(`输出目录: ${args.outDir}`);
 }
 
 async function processMaterials({ materials, context, args, manifest, failures, manifestPath, failuresPath, referer, label }) {
