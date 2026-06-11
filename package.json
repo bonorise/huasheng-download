@@ -9,7 +9,8 @@
   "main": "src/index.js",
   "scripts": {
     "download": "node ./src/index.js",
-    "check": "node --check ./src/index.js && node --check ./src/shared.js && node --check ./src/huasheng-download.js && node --check ./src/mg-download.js",
+    "create": "node ./src/huasheng-create.js",
+    "check": "node --check ./src/index.js && node --check ./src/shared.js && node --check ./src/huasheng-download.js && node --check ./src/mg-download.js && node --check ./src/huasheng-create.js",
     "test": "node --test"
   },
   "keywords": [],
