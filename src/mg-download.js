@@ -7,7 +7,6 @@ import {
   ensureDir,
   isProbablyLoggedOut,
   launchBrowser,
-  materialUrlKey,
   pad2,
   pauseForEnter,
   shortUrl,
@@ -19,7 +18,6 @@ const SCROLL_AREA_SELECTOR = '.flex.items-end.flex-1.gap-3';
 const CLIP_CARD_SELECTOR = '[class*="video-clip-"]';
 const COVER_IMG_SELECTOR = '.clip-card-box img';
 const MG_BUTTON_SELECTOR = 'span.font-normal.text-\\[12px\\].whitespace-nowrap';
-const VIDEO_MOV_SRC_SELECTOR = 'video[data-mov-src]';
 const DEFAULT_STOP_AFTER_EMPTY_SCROLLS = 3;
 
 function parseArgs(argv) {
@@ -87,11 +85,7 @@ async function collectClipCards(page) {
         if (!clipId || seenSet.has(clipId)) continue;
         seenSet.add(clipId);
         const rect = el.getBoundingClientRect();
-        result.push({
-          clipId,
-          x: Math.round(rect.left),
-          y: Math.round(rect.top),
-        });
+        result.push({ clipId, x: Math.round(rect.left), y: Math.round(rect.top) });
       }
       return result;
     }, { cardSelector: CLIP_CARD_SELECTOR, seen: Array.from(seenClipIds) });
@@ -109,9 +103,7 @@ async function collectClipCards(page) {
 
     await page.evaluate((selector) => {
       const container = document.querySelector(selector);
-      if (container) {
-        container.scrollBy({ left: 400, behavior: 'instant' });
-      }
+      if (container) container.scrollBy({ left: 400, behavior: 'instant' });
     }, SCROLL_AREA_SELECTOR);
     await page.waitForTimeout(600);
   }
@@ -120,9 +112,62 @@ async function collectClipCards(page) {
   return cards;
 }
 
+/**
+ * 在浏览器上下文中 fetch blob URL，转 base64 返回。
+ * 这是获取 MG 动画数据的正确方式——直接读取 video 元素的 blob src。
+ */
+async function downloadBlobAsBase64(page, blobUrl) {
+  return page.evaluate(async (url) => {
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(`fetch blob failed: ${resp.status}`);
+    const buffer = await resp.arrayBuffer();
+    const uint8 = new Uint8Array(buffer);
+
+    // 分块转 base64，避免 String.fromCharCode.apply 调用栈溢出
+    let binary = '';
+    const CHUNK = 8192;
+    for (let i = 0; i < uint8.length; i += CHUNK) {
+      const chunk = uint8.subarray(i, i + CHUNK);
+      binary += String.fromCharCode.apply(null, chunk);
+    }
+    return btoa(binary);
+  }, blobUrl);
+}
+
+/**
+ * 点击 MG 动画按钮 → 等待 video blob 出现 → 提取 blob 数据
+ * @returns {{ base64: string, blobUrl: string } | null}
+ */
+async function captureMGBlob(page, button, mgNumber) {
+  await button.click({ timeout: 3000 });
+
+  // 等待 video 元素 src 变为 blob: URL
+  let blobUrl = '';
+  try {
+    blobUrl = await page.evaluate(
+      () => {
+        const videos = document.querySelectorAll('video');
+        for (const v of videos) {
+          if (v.src && v.src.startsWith('blob:')) return v.src;
+        }
+        return '';
+      },
+      { timeout: 10000 },
+    );
+  } catch {
+    // 超时
+  }
+
+  if (!blobUrl) throw new Error('未找到 blob video 元素');
+
+  const base64 = await downloadBlobAsBase64(page, blobUrl);
+  return { base64, blobUrl };
+}
+
 async function extractMGAnimations(page, args) {
   const materials = [];
   const failures = [];
+  const seenBlobUrls = new Set(); // 去重：同一 blob URL 不重复捕获
 
   console.log('\n[MG] 收集分镜卡片...');
   const cards = await collectClipCards(page);
@@ -130,17 +175,21 @@ async function extractMGAnimations(page, args) {
 
   let processedCount = 0;
   for (const card of cards) {
+    if (args.limit && materials.length >= args.limit) break;
+
     const cardLocator = page.locator(`[class*="video-clip-${card.clipId}"]`).first();
     await cardLocator.scrollIntoViewIfNeeded().catch(() => {});
-    await page.waitForTimeout(300);
+    await page.waitForTimeout(200);
 
     const coverImg = cardLocator.locator(COVER_IMG_SELECTOR).first();
-    await coverImg.hover({ timeout: 3000 }).catch(() => {});
-    await page.waitForTimeout(500);
+    await coverImg.hover({ timeout: 2500 }).catch(() => {});
+    await page.waitForTimeout(400);
 
     const mgButtons = cardLocator.locator(MG_BUTTON_SELECTOR);
     const mgCount = await mgButtons.count().catch(() => 0);
     if (mgCount === 0) continue;
+
+    processedCount += 1;
 
     for (let i = 0; i < mgCount; i += 1) {
       if (args.limit && materials.length >= args.limit) break;
@@ -150,65 +199,42 @@ async function extractMGAnimations(page, args) {
       const mgNumber = mgAnimationNumber(buttonText);
       if (!mgNumber) continue;
 
+      // 跳过已存在的文件
+      const filename = await mgFilename(mgNumber);
+      const filePath = path.join(args.outDir, filename);
       try {
-        await button.click({ timeout: 3000 });
-        await page.waitForTimeout(800);
+        await fs.access(filePath);
+        console.log(`[MG] 跳过 MG动画 ${pad2(mgNumber)} (已存在)`);
+        continue;
+      } catch { /* 不存在，继续 */ }
 
-        const videoEl = page.locator(VIDEO_MOV_SRC_SELECTOR).last();
-        const movSrc = await videoEl.getAttribute('data-mov-src', { timeout: 6000 }).catch(() => '');
+      try {
+        const result = await captureMGBlob(page, button, mgNumber);
 
-        if (movSrc && /^https?:\/\//.test(movSrc)) {
-          const key = materialUrlKey(movSrc);
-          const exists = materials.some((m) => m.key === key);
-          if (!exists) {
-            materials.push({
-              mgNumber,
-              url: movSrc,
-              key,
-            });
-            console.log(`[MG] 捕获 MG动画 ${pad2(mgNumber)}: ${shortUrl(movSrc)}`);
-          }
-        } else {
-          failures.push({
-            mgNumber,
-            clipId: card.clipId,
-            reason: movSrc ? `非法的 data-mov-src: ${shortUrl(movSrc)}` : '未找到 data-mov-src',
-          });
+        // 去重：同一 blob URL 说明是同一段视频
+        if (seenBlobUrls.has(result.blobUrl)) {
+          console.log(`[MG] 跳过 MG动画 ${pad2(mgNumber)} (blob URL 重复)`);
+          continue;
         }
-      } catch (error) {
-        failures.push({
+        seenBlobUrls.add(result.blobUrl);
+
+        const estimatedBytes = Math.round((result.base64.length * 3) / 4);
+        console.log(`[MG] 捕获 MG动画 ${pad2(mgNumber)}: ${shortUrl(result.blobUrl)} (≈${(estimatedBytes / 1024 / 1024).toFixed(1)} MB)`);
+
+        materials.push({
           mgNumber,
-          clipId: card.clipId,
-          reason: error.message,
+          base64: result.base64,
+          blobUrl: result.blobUrl,
         });
+      } catch (error) {
+        failures.push({ mgNumber, clipId: card.clipId, reason: error.message });
         console.warn(`[MG] MG动画 ${pad2(mgNumber)} 提取失败: ${error.message}`);
       }
     }
-
-    processedCount += 1;
-    if (args.limit && materials.length >= args.limit) break;
   }
 
   console.log(`[MG] 已处理 ${processedCount} 个分镜，捕获 ${materials.length} 个 MG 动画`);
   return { materials, failures };
-}
-
-async function downloadMGVideo(context, url, outDir, filename, referer) {
-  const response = await context.request.get(url, {
-    timeout: 120000,
-    headers: {
-      referer,
-      'user-agent': 'Mozilla/5.0 (Macintosh; Apple Silicon Mac OS X) AppleWebKit/537.36 (KHTML, like Gecko) Chrome Safari/537.36',
-    },
-  });
-
-  if (!response.ok()) {
-    throw new Error(`HTTP ${response.status()} ${response.statusText()}`);
-  }
-  const body = await response.body();
-  const filePath = path.join(outDir, filename);
-  await writeFileExclusive(filePath, body);
-  return { filename, filePath, bytes: body.byteLength };
 }
 
 export async function downloadMGAnimations({ page, context, args }) {
@@ -220,15 +246,11 @@ export async function downloadMGAnimations({ page, context, args }) {
   try {
     const existing = await fs.readFile(manifestPath, 'utf8');
     manifest = JSON.parse(existing);
-  } catch {
-    // file doesn't exist, use empty manifest
-  }
+  } catch { /* file doesn't exist */ }
   try {
     const existing = await fs.readFile(failuresPath, 'utf8');
     failures = JSON.parse(existing);
-  } catch {
-    // file doesn't exist
-  }
+  } catch { /* file doesn't exist */ }
 
   await page.goto(args.url, { waitUntil: 'domcontentloaded', timeout: 60000 });
   await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
@@ -251,27 +273,28 @@ export async function downloadMGAnimations({ page, context, args }) {
     return { downloaded: 0, failed: extractionFailures.length };
   }
 
+  // 下载阶段：base64 解码 → 写入文件
   let downloaded = 0;
   for (const item of mgMaterials) {
     const filename = await mgFilename(item.mgNumber);
     const record = {
       type: 'mg',
       mgNumber: item.mgNumber,
-      sourceUrl: item.url,
-      sourceKey: item.key,
+      sourceBlobUrl: item.blobUrl,
       status: args.dryRun ? 'dry-run' : 'pending',
       filename,
     };
 
     try {
       if (!args.dryRun) {
-        const result = await downloadMGVideo(context, item.url, args.outDir, filename, args.url);
-        Object.assign(record, {
-          status: 'downloaded',
-          filePath: result.filePath,
-          bytes: result.bytes,
-        });
-        console.log(`[MG] 已下载 ${result.filename} (${result.bytes} bytes)`);
+        const filePath = path.join(args.outDir, filename);
+        const buffer = Buffer.from(item.base64, 'base64');
+        // 使用排他写入（保持与其他下载逻辑一致）
+        await fs.writeFile(filePath, buffer, { flag: 'wx' });
+        record.status = 'downloaded';
+        record.filePath = filePath;
+        record.bytes = buffer.byteLength;
+        console.log(`[MG] 已下载 ${filename} (${buffer.byteLength} bytes)`);
         downloaded += 1;
       }
     } catch (error) {

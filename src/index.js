@@ -67,7 +67,7 @@ async function main() {
       console.log('========================================');
 
       const collectionArgs = {
-        url: COLLECTION_URL,
+        url: rawArgs.url || COLLECTION_URL,
         outDir: rawArgs.outDir,
         profileDir: rawArgs.profileDir,
         headless: rawArgs.headless,
