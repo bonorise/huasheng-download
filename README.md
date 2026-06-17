@@ -2,8 +2,6 @@
 
 输入华声项目 URL，默认下载“收藏”tab 里的全局收藏素材，提取素材播放弹窗中的 mp4 地址，并下载到桌面 `hs-src` 文件夹。也可以切换到“推荐”模式，按分镜下载推荐素材。
 
-如果要下载页面中由 blob URL 加载的 MG 动画 webm，请使用独立的 MG 下载命令。
-
 ## 安装
 
 当前机器是 Apple Silicon M1，安装依赖时固定 arm64：
@@ -40,17 +38,6 @@ npm run download -- https://www.huasheng.cn/video/158889664548866 --last-url "ht
 npm run download -- https://www.huasheng.cn/video/158889664548866 --count 43
 ```
 
-下载 MG 动画 webm：
-
-```bash
-npm run mg-download -- https://www.huasheng.cn/video/158889664548866 --count 43
-```
-
-如果自动发现分镜不完整：
-
-```bash
-npm run mg-download -- https://www.huasheng.cn/video/158889664548866 --last-url "https://www.huasheng.cn/video/158889664548866?clip=42"
-```
 
 ## 输出
 
@@ -74,19 +61,10 @@ npm run mg-download -- https://www.huasheng.cn/video/158889664548866 --last-url 
 分镜01_素材02.mp4
 ```
 
-MG 动画命名为：
-
-```text
-分镜01_MG.webm
-分镜02_MG.webm
-```
-
 同时生成：
 
 - `manifest.json`：所有素材的来源、输出文件和状态。
 - `failures.json`：失败分镜或失败素材记录。
-- `mg-manifest.json`：MG 动画下载记录。
-- `mg-failures.json`：MG 动画失败记录。
 
 ## 常用选项
 
@@ -101,5 +79,3 @@ MG 动画命名为：
 --dry-run           只提取素材 URL，不下载
 --slow-mo <毫秒>    浏览器操作延迟，默认 80
 ```
-
-MG 下载命令同样支持 `--out`、`--profile`、`--count`、`--last-url`、`--limit`、`--headless`、`--dry-run`、`--slow-mo`。
