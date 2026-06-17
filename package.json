@@ -9,7 +9,8 @@
   "main": "src/huasheng-download.js",
   "scripts": {
     "download": "node ./src/huasheng-download.js",
-    "check": "node --check ./src/huasheng-download.js",
+    "mg-download": "node ./src/mg-download.js",
+    "check": "node --check ./src/huasheng-download.js && node --check ./src/mg-download.js",
     "test": "node --test"
   },
   "keywords": [],
