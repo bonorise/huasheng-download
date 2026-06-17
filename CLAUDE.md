@@ -38,17 +38,20 @@ npm run mg-download -- <URL> # 下载 MG 动画 (webm)
 
 ### `src/mg-download.js` — MG 动画下载
 
-打开项目视频页，在底部分镜卡片横滚区域收集卡片，hover 触发 MG 按钮，点击后提取 blob URL 视频数据。
+打开项目视频页，在底部分镜卡片横滚区域收集卡片，hover 触发 MG 按钮，通过 blob 差分检测提取 MG 动画视频数据。
 
 核心流程：
 1. `collectClipCards()` — 横向滚动画廊收集 `video-clip-*` 卡片
 1. 逐卡片 hover → 找到 MG 按钮（`span.font-normal.text-[12px].whitespace-nowrap`）
-1. 点击按钮 → `waitForWebmBlobVideo()` 等待并筛选 WebM blob video → `readBlobVideo()` 在页面内 fetch blob 数据，分块转 base64
+1. `captureMGBlob()` — 点击前记录 `currentBlobVideoUrls()`，点击后双层检测新 blob：
+   - `waitForWebmBlobVideo()` — 按面积排序可见 video，检查 `blob.type === 'video/webm'` 或文件头 `1a 45 df a3`（WebM magic bytes）
+   - `waitForBlobVideoUrl()` — 短超时（1s）回退：任何新 blob 都接受，然后报"不是 webm"供调试
+1. `readBlobVideo()` — 页面内 fetch blob，0x8000 分块转 base64
 1. `seenBlobUrls` Set 去重，写 `manifest.json` 和 `failures.json`
 
 关键细节：
-- `waitForWebmBlobVideo()` 只接受 `video/webm` 或文件头为 `1a 45 df a3` 的 blob，避免误抓分镜 mp4 blob
-- `readBlobVideo()` 用 0x8000 分块编码避免 `String.fromCharCode.apply` 栈溢出
+- **点击前/后 blob URL 差分**是核心创新：记录点击前的所有 blob URL，只提取点击后新出现的，避免误抓分镜预览 mp4
+- 双层检测确保优先捕获 WebM MG 动画；回退层提供可调试的错误信息
 - 输出格式 `MG动画_01.webm`，`--limit` 控制最多下载数量
 
 ### 共享模式
