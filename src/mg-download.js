@@ -24,6 +24,7 @@ function parseArgs(argv) {
     dryRun: false,
     slowMo: 80,
     limit: 0,
+    startCard: 0,
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -38,6 +39,7 @@ function parseArgs(argv) {
     else if (arg === '--profile') args.profileDir = path.resolve(argv[++i]);
     else if (arg === '--limit') args.limit = Number(argv[++i]);
     else if (arg === '--slow-mo') args.slowMo = Number(argv[++i]);
+    else if (arg === '--start-card') args.startCard = Number(argv[++i]);
     else if (arg === '--help' || arg === '-h') {
       printHelp();
       process.exit(0);
@@ -54,6 +56,9 @@ function parseArgs(argv) {
   if (args.limit && (!Number.isInteger(args.limit) || args.limit < 1)) {
     throw new Error('--limit 必须是大于 0 的整数。');
   }
+  if (args.startCard && (!Number.isInteger(args.startCard) || args.startCard < 1)) {
+    throw new Error('--start-card 必须是大于 0 的整数。');
+  }
   return args;
 }
 
@@ -69,6 +74,7 @@ function printHelp() {
   --out <目录>        输出目录，默认 ${DEFAULT_OUT_DIR}
   --profile <目录>    Playwright 登录态目录，默认 ${DEFAULT_PROFILE_DIR}
   --limit <数量>      最多下载多少个 MG 动画
+  --start-card <编号>  从指定分镜卡片编号开始处理，跳过之前的卡片
   --headless          无头模式。首次登录不建议使用
   --dry-run           只提取 blob URL，不下载
   --slow-mo <毫秒>    浏览器操作延迟，默认 80
@@ -343,7 +349,12 @@ async function extractMGAnimations(page, args) {
   console.log(`[MG] 发现 ${cards.length} 个分镜卡片`);
 
   let processedCount = 0;
+  let skippedCards = 0;
   for (const card of cards) {
+    if (args.startCard && Number(card.clipId) < args.startCard) {
+      skippedCards += 1;
+      continue;
+    }
     if (args.limit && materials.length >= args.limit) break;
 
     const cardLocator = page.locator(`[class*="video-clip-${card.clipId}"]`).first();
@@ -401,6 +412,9 @@ async function extractMGAnimations(page, args) {
     }
   }
 
+  if (skippedCards > 0) {
+    console.log(`[MG] 已跳过 ${skippedCards} 个分镜卡片 (clipId < ${args.startCard})`);
+  }
   console.log(`[MG] 已处理 ${processedCount} 个分镜，捕获 ${materials.length} 个 MG 动画`);
   return { materials, failures };
 }
