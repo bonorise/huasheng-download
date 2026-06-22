@@ -26,6 +26,12 @@ npm run mg-download -- <URL> # 下载 MG 动画 (webm)
 
 按分镜访问华声项目页，在"收藏"或"推荐"tab 中提取素材播放弹窗里的 mp4 URL。
 
+收藏模式流程：
+
+```text
+滚动提取 → 下载 → 取消收藏 → 重开列表 → 循环至收藏为空
+```
+
 核心流程：
 1. `discoverScenes()` — 从页面 `<a href>` 和文本中推断分镜总数
 1. 逐分镜 `openMaterialPanel()` → `selectMaterialTab()` → 滚动 `materialContainer()` → 提取 `visibleVideoSources()`
@@ -35,6 +41,8 @@ npm run mg-download -- <URL> # 下载 MG 动画 (webm)
 - `wx` flag 排他写入，**永不覆盖**已有文件
 - 收藏模式 `--limit` 是整次运行总量；推荐模式是每个分镜数量
 - `materialUrlKey()` 签名参数去重，通过 `seenKeys` Set 避免重复下载
+- 收藏文件从输出目录现有最大编号加一开始
+- 只有下载成功的素材才能取消收藏
 
 ### `src/mg-download.js` — MG 动画下载
 
@@ -53,6 +61,7 @@ npm run mg-download -- <URL> # 下载 MG 动画 (webm)
 - **点击前/后 blob URL 差分**是核心创新：记录点击前的所有 blob URL，只提取点击后新出现的，避免误抓分镜预览 mp4
 - 双层检测确保优先捕获 WebM MG 动画；回退层提供可调试的错误信息
 - 输出格式 `MG动画_01.webm`，`--limit` 控制最多下载数量
+- headless 模式可能导致 blob fetch 全部失败，改用可见浏览器模式
 
 ### 共享模式
 

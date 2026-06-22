@@ -1,0 +1,347 @@
+- generic [ref=e1]:
+  - main [ref=e2]:
+    - generic:
+      - generic [ref=e3]:
+        - img [ref=e4]
+        - img [ref=e8] [cursor=pointer]
+      - generic [ref=e12]:
+        - navigation [ref=e15]:
+          - link [ref=e17] [cursor=pointer]:
+            - /url: /
+          - img "avatar" [ref=e21] [cursor=pointer]
+        - generic [ref=e22]:
+          - generic [ref=e26]:
+            - generic [ref=e29]:
+              - img
+              - generic [ref=e30]:
+                - generic [ref=e32]:
+                  - generic [ref=e33]:
+                    - textbox [ref=e34]
+                    - generic:
+                      - generic: 0 / 10000
+                  - generic:
+                    - generic: 输入/粘贴视频文稿，即刻为你生成精彩视频
+                - generic [ref=e36]:
+                  - generic "创作倾向" [ref=e39]:
+                    - img [ref=e40] [cursor=pointer]
+                  - button "创建" [ref=e44]:
+                    - img [ref=e45]
+                    - generic [ref=e47]:
+                      - img [ref=e48]
+                      - text: 创建
+              - generic [ref=e50]:
+                - generic [ref=e51] [cursor=pointer]: 输入文稿
+                - generic [ref=e52] [cursor=pointer]: 上传口播
+              - button "口播配音" [ref=e56] [cursor=pointer]:
+                - generic [ref=e57]: 口播配音
+                - img [ref=e58]
+            - generic [ref=e79]:
+              - generic [ref=e80] [cursor=pointer]: 🔎 创作科学科普视频 →
+              - generic [ref=e81] [cursor=pointer]: 📈 创作财经分析视频 →
+              - generic [ref=e82] [cursor=pointer]: 📜 创作历史解说视频 →
+              - generic [ref=e83] [cursor=pointer]: ⚽️ 创作足球解说视频 →
+          - generic [ref=e61]:
+            - generic [ref=e62]: 灵感发现
+            - generic [ref=e84]:
+              - generic [ref=e85] [cursor=pointer]:
+                - generic [ref=e88]:
+                  - generic [ref=e89]:
+                    - img [ref=e90]
+                    - text: 57.6万
+                  - generic [ref=e93]: 03:27
+                - generic [ref=e94]:
+                  - generic [ref=e95]: 佛得角奇迹！费兰托雷斯屡失良机，沃齐尼亚屡献神扑，亚马尔替补表现平平，佛得角0比0西班牙！
+                  - generic [ref=e96]:
+                    - generic [ref=e97]:
+                      - img [ref=e98]
+                      - generic [ref=e101]: 巅峰球迷汇
+                    - generic [ref=e102]: ·
+                    - generic [ref=e103]: 44.3万粉丝
+              - generic [ref=e104] [cursor=pointer]:
+                - generic [ref=e107]:
+                  - generic [ref=e108]:
+                    - img [ref=e109]
+                    - text: 6.9万
+                  - generic [ref=e112]: 16:51
+                - generic [ref=e113]:
+                  - generic [ref=e114]: 世界杯强队都有自己的死法，单核 vs 多核 vs 团队的各种剧本
+                  - generic [ref=e115]:
+                    - generic [ref=e116]:
+                      - img [ref=e117]
+                      - generic [ref=e120]: 足球简史
+                    - generic [ref=e121]: ·
+                    - generic [ref=e122]: 543粉丝
+              - generic [ref=e123] [cursor=pointer]:
+                - generic [ref=e126]:
+                  - generic [ref=e127]:
+                    - img [ref=e128]
+                    - text: 5.2万
+                  - generic [ref=e131]: 02:07
+                - generic [ref=e132]:
+                  - generic [ref=e133]: 5万身价挡住12亿的西班牙，40岁的佛得角门将7次扑救封神！
+                  - generic [ref=e134]:
+                    - generic [ref=e135]:
+                      - img [ref=e136]
+                      - generic [ref=e139]: 司马尘
+                    - generic [ref=e140]: ·
+                    - generic [ref=e141]: 45.6万粉丝
+              - generic [ref=e142] [cursor=pointer]:
+                - generic [ref=e145]:
+                  - generic [ref=e146]:
+                    - img [ref=e147]
+                    - text: 4.6万
+                  - generic [ref=e150]: 18:03
+                - generic [ref=e151]:
+                  - generic [ref=e152]: 遇见小面是商业维权还是品牌霸凌？
+                  - generic [ref=e153]:
+                    - generic [ref=e154]:
+                      - img [ref=e155]
+                      - generic [ref=e158]: 鼠鼠文学
+                    - generic [ref=e159]: ·
+                    - generic [ref=e160]: 131.8万粉丝
+              - generic [ref=e161] [cursor=pointer]:
+                - generic [ref=e164]:
+                  - generic [ref=e165]:
+                    - img [ref=e166]
+                    - text: "1782"
+                  - generic [ref=e169]: 05:13
+                - generic [ref=e170]:
+                  - generic [ref=e171]: 十六年终圆梦！墨西哥老将打破世界杯揭幕战魔咒
+                  - generic [ref=e172]:
+                    - generic [ref=e173]:
+                      - img [ref=e174]
+                      - generic [ref=e177]: JackieGu1998
+                    - generic [ref=e178]: ·
+                    - generic [ref=e179]: 231粉丝
+              - generic [ref=e180] [cursor=pointer]:
+                - generic [ref=e183]:
+                  - generic [ref=e184]:
+                    - img [ref=e185]
+                    - text: 101.6万
+                  - generic [ref=e188]: 11:59
+                - generic [ref=e189]:
+                  - generic [ref=e190]: 指鹅为鸭：一只鸭腿如何骗过清北学子十几年
+                  - generic [ref=e191]:
+                    - generic [ref=e192]:
+                      - img [ref=e193]
+                      - generic [ref=e196]: 水元子A
+                    - generic [ref=e197]: ·
+                    - generic [ref=e198]: 18.6万粉丝
+              - generic [ref=e199] [cursor=pointer]:
+                - generic [ref=e202]:
+                  - generic [ref=e203]:
+                    - img [ref=e204]
+                    - text: 3.8万
+                  - generic [ref=e207]: 25:41
+                - generic [ref=e208]:
+                  - generic [ref=e209]: 比亚迪--全产业链技术巨兽因何困于美学设计
+                  - generic [ref=e210]:
+                    - generic [ref=e211]:
+                      - img [ref=e212]
+                      - generic [ref=e215]: 打喷嚏的聪明老师
+                    - generic [ref=e216]: ·
+                    - generic [ref=e217]: 1.1万粉丝
+              - generic [ref=e218] [cursor=pointer]:
+                - generic [ref=e221]:
+                  - generic [ref=e222]:
+                    - img [ref=e223]
+                    - text: 57.3万
+                  - generic [ref=e226]: 12:15
+                - generic [ref=e227]:
+                  - generic [ref=e228]: SpaceX万亿IPO：马斯克负责上火星，谁负责当燃料？
+                  - generic [ref=e229]:
+                    - generic [ref=e230]:
+                      - img [ref=e231]
+                      - generic [ref=e234]: 柳行长
+                    - generic [ref=e235]: ·
+                    - generic [ref=e236]: 155.0万粉丝
+              - generic [ref=e237] [cursor=pointer]:
+                - generic [ref=e240]:
+                  - generic [ref=e241]:
+                    - img [ref=e242]
+                    - text: 285.7万
+                  - generic [ref=e245]: 14:48
+                - generic [ref=e246]:
+                  - generic [ref=e247]: 日元血崩 日本女性悲剧再次上演！
+                  - generic [ref=e248]:
+                    - generic [ref=e249]:
+                      - img [ref=e250]
+                      - generic [ref=e253]: 树根龙门阵
+                    - generic [ref=e254]: ·
+                    - generic [ref=e255]: 120.1万粉丝
+              - generic [ref=e256] [cursor=pointer]:
+                - generic [ref=e259]:
+                  - generic [ref=e260]:
+                    - img [ref=e261]
+                    - text: 6.0万
+                  - generic [ref=e264]: 12:15
+                - generic [ref=e265]:
+                  - generic [ref=e266]: 【百年化学 日本篇 No.80】切菜如切豆腐，拍蒜即报废？揭秘氧化锆的暴脾气与相变增韧
+                  - generic [ref=e267]:
+                    - generic [ref=e268]:
+                      - img [ref=e269]
+                      - generic [ref=e272]: 喵教授ProfessorMeow
+                    - generic [ref=e273]: ·
+                    - generic [ref=e274]: 16.4万粉丝
+              - generic [ref=e275] [cursor=pointer]:
+                - generic [ref=e278]:
+                  - generic [ref=e279]:
+                    - img [ref=e280]
+                    - text: 1.9万
+                  - generic [ref=e283]: 29:46
+                - generic [ref=e284]:
+                  - generic [ref=e285]: 【硬核】万字解析：现代教育制度的死与生，高考遇冷、专业大撤、学校合并…我们拼命卷的学历还有用吗？未来十年中国教育巨变的底层逻辑是什么？琼州牧刘洝
+                  - generic [ref=e286]:
+                    - generic [ref=e287]:
+                      - img [ref=e288]
+                      - generic [ref=e291]: 琼州牧刘洝
+                    - generic [ref=e292]: ·
+                    - generic [ref=e293]: 1262粉丝
+              - generic [ref=e294] [cursor=pointer]:
+                - generic [ref=e297]:
+                  - generic [ref=e298]:
+                    - img [ref=e299]
+                    - text: 125.1万
+                  - generic [ref=e302]: 20:15
+                - generic [ref=e303]:
+                  - generic [ref=e304]: 军舰装反，政党内斗，移民住酒店，印度化的大英真拉完了！
+                  - generic [ref=e305]:
+                    - generic [ref=e306]:
+                      - img [ref=e307]
+                      - generic [ref=e310]: 星辰趣味屋
+                    - generic [ref=e311]: ·
+                    - generic [ref=e312]: 154.0万粉丝
+              - generic [ref=e313] [cursor=pointer]:
+                - generic [ref=e316]:
+                  - generic [ref=e317]:
+                    - img [ref=e318]
+                    - text: 1.6万
+                  - generic [ref=e321]: 21:47
+                - generic [ref=e322]:
+                  - generic [ref=e323]: 从一条鞭法到摊丁入亩：中国古代财政的信用困境
+                  - generic [ref=e324]:
+                    - generic [ref=e325]:
+                      - img [ref=e326]
+                      - generic [ref=e329]: 历史与战争
+                    - generic [ref=e330]: ·
+                    - generic [ref=e331]: 1328粉丝
+              - generic [ref=e332] [cursor=pointer]:
+                - generic [ref=e335]:
+                  - generic [ref=e336]:
+                    - img [ref=e337]
+                    - text: 4.6万
+                  - generic [ref=e340]: 10:43
+                - generic [ref=e341]:
+                  - generic [ref=e342]: 你的食物为什么不会发霉？——山梨酸钾的奇妙身世 食品添加剂发展史：从野果到防腐剂 山梨酸钾如何改变人类饮食？
+                  - generic [ref=e343]:
+                    - generic [ref=e344]:
+                      - img [ref=e345]
+                      - generic [ref=e348]: 名人饮食录
+                    - generic [ref=e349]: ·
+                    - generic [ref=e350]: 4.9万粉丝
+              - generic [ref=e351] [cursor=pointer]:
+                - generic [ref=e354]:
+                  - generic [ref=e355]:
+                    - img [ref=e356]
+                    - text: 57.3万
+                  - generic [ref=e359]: 03:24
+                - generic [ref=e360]:
+                  - generic [ref=e361]: 中大型鹦鹉为什么不能做宠物，百分之99的人理解错了！
+                  - generic [ref=e362]:
+                    - generic [ref=e363]:
+                      - img [ref=e364]
+                      - generic [ref=e367]: 龙女之声
+                    - generic [ref=e368]: ·
+                    - generic [ref=e369]: 193.7万粉丝
+              - generic [ref=e370] [cursor=pointer]:
+                - generic [ref=e373]:
+                  - generic [ref=e374]:
+                    - img [ref=e375]
+                    - text: 16.2万
+                  - generic [ref=e378]: 13:05
+                - generic [ref=e379]:
+                  - generic [ref=e380]: 年轻人不爱唱歌爱捏脚：KTV的十年消亡史，崛起的7000亿足疗帝国
+                  - generic [ref=e381]:
+                    - generic [ref=e382]:
+                      - img [ref=e383]
+                      - generic [ref=e386]: 蓝白argentina
+                    - generic [ref=e387]: ·
+                    - generic [ref=e388]: 91.5万粉丝
+              - generic [ref=e389] [cursor=pointer]:
+                - generic [ref=e392]:
+                  - generic [ref=e393]:
+                    - img [ref=e394]
+                    - text: 3.4万
+                  - generic [ref=e397]: 11:16
+                - generic [ref=e398]:
+                  - generic [ref=e399]: 饮食重塑的全球秩序与千年之变：年度大事件官宣【花生】
+                  - generic [ref=e400]:
+                    - generic [ref=e401]:
+                      - img [ref=e402]
+                      - generic [ref=e405]: 罗格觅食记
+                    - generic [ref=e406]: ·
+                    - generic [ref=e407]: 9.1万粉丝
+              - generic [ref=e408] [cursor=pointer]:
+                - generic [ref=e411]:
+                  - generic [ref=e412]:
+                    - img [ref=e413]
+                    - text: 1.2万
+                  - generic [ref=e416]: 32:58
+                - generic [ref=e417]:
+                  - generic [ref=e418]: 蒜去鱼腥？错！真正有效的是酸和紫苏！鱼香肉丝的鱼香竟然是姜味！
+                  - generic [ref=e419]:
+                    - generic [ref=e420]:
+                      - img [ref=e421]
+                      - generic [ref=e424]: UCL哲♂学教授
+                    - generic [ref=e425]: ·
+                    - generic [ref=e426]: 1716粉丝
+              - generic [ref=e427] [cursor=pointer]:
+                - generic [ref=e430]:
+                  - generic [ref=e431]:
+                    - img [ref=e432]
+                    - text: 3.6万
+                  - generic [ref=e435]: 55:51
+                - generic [ref=e436]:
+                  - generic [ref=e437]: 自然博物馆死忠粉的化石人生【非典型科学家】31#奥尔洛夫【花生】
+                  - generic [ref=e438]:
+                    - generic [ref=e439]:
+                      - img [ref=e440]
+                      - generic [ref=e443]: 非村科普墙
+                    - generic [ref=e444]: ·
+                    - generic [ref=e445]: 6.1万粉丝
+              - generic [ref=e446] [cursor=pointer]:
+                - generic [ref=e449]:
+                  - generic [ref=e450]:
+                    - img [ref=e451]
+                    - text: 2.9万
+                  - generic [ref=e454]: 09:46
+                - generic [ref=e455]:
+                  - generic [ref=e456]: 细读经典，如果死亡只是一场梦，博尔赫斯《等待》！承受一件可怕的事，要比没完没了地想像它轻松！【花生】
+                  - generic [ref=e457]:
+                    - generic [ref=e458]:
+                      - img [ref=e459]
+                      - generic [ref=e462]: 迷雾地上
+                    - generic [ref=e463]: ·
+                    - generic [ref=e464]: 9.6万粉丝
+          - generic [ref=e64]:
+            - link "隐私政策" [ref=e65] [cursor=pointer]:
+              - /url: /blackboard/era/xvQno42uu09wWtUl.html
+              - generic [ref=e66]: 隐私政策
+            - link "花生使用服务协议" [ref=e67] [cursor=pointer]:
+              - /url: /blackboard/era/1Cra21NxnhLjS5ji.html
+              - generic [ref=e68]: 花生使用服务协议
+            - link "沪ICP备13044875号-8" [ref=e69] [cursor=pointer]:
+              - /url: https://beian.miit.gov.cn/#/Integrated/index
+              - generic [ref=e70]: 沪ICP备13044875号-8
+        - button "联系客服" [ref=e73] [cursor=pointer]:
+          - img [ref=e74]
+  - alert [ref=e76]
+  - generic [ref=e465]:
+    - dialog:
+      - generic [ref=e468]:
+        - button [ref=e469] [cursor=pointer]:
+          - img [ref=e470]
+        - generic [ref=e474]:
+          - heading "花生上线足球季专属MG动画" [level=3] [ref=e475]
+          - paragraph [ref=e476]: 足球战术板、漫画重绘等功能，支持表现足球战术推演、赛况/名场面重现等创作场景，助力UP主足球季稿件创作~
+        - button "查看使用手册" [ref=e478] [cursor=pointer]

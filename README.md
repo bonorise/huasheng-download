@@ -14,11 +14,31 @@ npm_config_arch=arm64 npm_config_platform=darwin npm install
 
 首次运行建议使用可见浏览器。如果打开后不是已登录状态，请在浏览器里登录华声，回到终端按回车继续。登录态会保存在项目内 `.browser-profile`。
 
+### 根据 TXT 文案创建项目
+
+传入 UTF-8 TXT 文件。脚本会复用 `.browser-profile` 登录态，创建项目、选择“A - 素材剪辑成片”，并自动提交两次“确认”：
+
+```bash
+npm run create -- /绝对路径/文案.txt
+```
+
+可选参数：
+
+```text
+--profile <目录>    Playwright 登录态目录，默认 .browser-profile
+--headless          无头模式；登录失效时无法人工恢复
+--slow-mo <毫秒>    浏览器操作延迟，默认 80
+```
+
+每一步最长等待 60 秒，目标出现后立即继续。成功后终端会输出新项目 URL；成功或失败时浏览器都会保持打开，使用 `Ctrl+C` 结束脚本。
+
+### 下载项目素材
+
 ```bash
 npm run download -- https://www.huasheng.cn/video/158889664548866
 ```
 
-默认会点击“收藏”tab，不按分镜循环。适合你先手动浏览素材并收藏需要下载的素材。
+默认会点击“收藏”tab，不按分镜循环。脚本会多轮提取、下载并取消成功下载素材的收藏，直到收藏列表清空或达到 `--limit`。下载失败的素材最多尝试两次；取消收藏失败的素材不会重复下载，但会在下一轮继续尝试取消收藏。
 
 如果要按分镜下载“推荐”素材：
 
@@ -54,6 +74,8 @@ npm run download -- https://www.huasheng.cn/video/158889664548866 --count 43
 素材02.mp4
 ```
 
+收藏模式会扫描输出目录中的现有文件，从最大编号的下一位继续。例如目录中已有 `素材01.mp4` 到 `素材12.mp4`，新素材从 `素材13.mp4` 开始。写入使用排他模式，即使运行期间出现同名文件也会自动使用下一编号，绝不会覆盖已有视频。
+
 推荐模式下命名为：
 
 ```text
@@ -66,6 +88,12 @@ npm run download -- https://www.huasheng.cn/video/158889664548866 --count 43
 - `manifest.json`：所有素材的来源、输出文件和状态。
 - `failures.json`：失败分镜或失败素材记录。
 
+收藏模式的每条记录还包含 `uncollectStatus`：
+
+- `uncollected`：下载成功，并已取消收藏。
+- `failed`：下载成功，但取消收藏失败。
+- `skipped`：下载失败或使用了 `--dry-run`，未执行取消收藏。
+
 ## 常用选项
 
 ```text
@@ -74,7 +102,7 @@ npm run download -- https://www.huasheng.cn/video/158889664548866 --count 43
 --count <数量>      分镜总数
 --last-url <URL>    最后一个分镜 URL，用于推算分镜总数
 --tab <收藏|推荐>   素材来源，默认 收藏
---limit <数量>      最多下载多少个素材；推荐模式下表示每个分镜最多数量
+--limit <数量>      收藏模式表示本次运行总量；推荐模式表示每个分镜最多数量
 --headless          无头模式，首次登录不建议使用
 --dry-run           只提取素材 URL，不下载
 --slow-mo <毫秒>    浏览器操作延迟，默认 80
