@@ -258,12 +258,11 @@ async function submitChatMessage(page, message) {
   );
 }
 
-async function submitCreateMode(page, mode) {
-  await submitChatMessage(page, mode);
-}
-
-async function submitConfirmation(page) {
-  await submitChatMessage(page, '确认');
+// 纯定时操作：等待指定秒数后发送聊天消息（不依赖 DOM 检测）
+async function waitAndSubmit(page, message, waitSeconds) {
+  console.log(`   ⏳ 等待 ${waitSeconds}s 后提交: "${message}"...`);
+  await new Promise((resolve) => setTimeout(resolve, waitSeconds * 1000));
+  await submitChatMessage(page, message);
 }
 
 async function waitForVideoProjectUrl(page) {
@@ -310,20 +309,24 @@ export async function createHuashengProject({ page, args, scriptText }) {
     await clickButtonByExactText(page, '创建');
   });
 
-  await runStepWithRetry(`提交${args.mode}方案`, async () => {
-    await submitCreateMode(page, args.mode);
+  // 等 60s → 输入"确认 A 方案" 或 "确认 B 方案"
+  await runStepWithRetry(`提交${args.mode}方案确认`, async () => {
+    await waitAndSubmit(page, `确认 ${args.mode} 方案`, 60);
   });
 
+  // 等 60s → 输入"确认"
   await runStepWithRetry('第一次提交确认', async () => {
-    await submitConfirmation(page);
+    await waitAndSubmit(page, '确认', 60);
   });
 
+  // 等待跳转到视频项目页（URL 跳转可靠）
   const projectUrl = await runStepWithRetry('等待视频项目页', async () => {
     return waitForVideoProjectUrl(page);
   });
 
+  // 等 60s → 输入"确认"
   await runStepWithRetry('第二次提交确认', async () => {
-    await submitConfirmation(page);
+    await waitAndSubmit(page, '确认', 60);
   });
 
   return projectUrl;
