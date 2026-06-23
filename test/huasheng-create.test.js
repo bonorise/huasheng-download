@@ -28,6 +28,28 @@ test('parseCreateArgs parses txt path and browser options', () => {
   assert.equal(args.slowMo, 120);
 });
 
+test('parseCreateArgs defaults create mode to A', () => {
+  const args = parseCreateArgs(['./input.txt']);
+  assert.equal(args.mode, 'A');
+});
+
+test('parseCreateArgs accepts create mode B', () => {
+  const args = parseCreateArgs(['./input.txt', '--mode', 'B']);
+  assert.equal(args.mode, 'B');
+});
+
+test('parseCreateArgs normalizes lowercase create mode', () => {
+  const args = parseCreateArgs(['./input.txt', '--mode', 'b']);
+  assert.equal(args.mode, 'B');
+});
+
+test('parseCreateArgs rejects invalid create mode', () => {
+  assert.throws(
+    () => parseCreateArgs(['./input.txt', '--mode', 'C']),
+    /--mode 只支持 A 或 B/
+  );
+});
+
 test('parseCreateArgs requires a txt path', () => {
   assert.throws(
     () => parseCreateArgs([]),

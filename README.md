@@ -16,10 +16,16 @@ npm_config_arch=arm64 npm_config_platform=darwin npm install
 
 ### 根据 TXT 文案创建项目
 
-传入 UTF-8 TXT 文件。脚本会复用 `.browser-profile` 登录态，创建项目、选择“A - 素材剪辑成片”，并自动提交两次“确认”：
+传入 UTF-8 TXT 文件。脚本会复用 `.browser-profile` 登录态，创建项目，默认在对话输入框提交 `A` 方案，并自动提交“确认”：
 
 ```bash
 npm run create -- /绝对路径/文案.txt
+```
+
+如果明确要使用 B 方案：
+
+```bash
+npm run create -- /绝对路径/文案.txt --mode B
 ```
 
 可选参数：
@@ -28,6 +34,7 @@ npm run create -- /绝对路径/文案.txt
 --profile <目录>    Playwright 登录态目录，默认 .browser-profile
 --headless          无头模式；登录失效时无法人工恢复
 --slow-mo <毫秒>    浏览器操作延迟，默认 80
+--mode <A|B>        制作方案，默认 A；B 为素材混合 MG 动画
 ```
 
 每一步最长等待 60 秒，目标出现后立即继续。成功后终端会输出新项目 URL；成功或失败时浏览器都会保持打开，使用 `Ctrl+C` 结束脚本。

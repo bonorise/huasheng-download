@@ -12,7 +12,6 @@ import {
 const HOME_URL = 'https://www.huasheng.cn/';
 const STEP_TIMEOUT_MS = 60_000;
 const CHAT_INPUT_SELECTOR = 'textarea[placeholder="输入你的任何想法"]';
-const CREATE_MODE_TEXT = 'A - 素材剪辑成片';
 
 export function parseCreateArgs(argv) {
   const args = {
@@ -20,6 +19,7 @@ export function parseCreateArgs(argv) {
     profileDir: DEFAULT_PROFILE_DIR,
     headless: false,
     slowMo: 80,
+    mode: 'A',
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -34,6 +34,14 @@ export function parseCreateArgs(argv) {
       args.headless = true;
     } else if (arg === '--slow-mo') {
       args.slowMo = Number(argv[++i]);
+    } else if (arg === '--mode') {
+      const value = argv[++i];
+      if (!value) throw new Error('--mode 需要提供 A 或 B。');
+      const mode = value.toUpperCase();
+      if (!['A', 'B'].includes(mode)) {
+        throw new Error('--mode 只支持 A 或 B。');
+      }
+      args.mode = mode;
     } else {
       throw new Error(`未知参数: ${arg}`);
     }
@@ -99,6 +107,30 @@ export async function runStepWithRetry(stepName, operation) {
   throw new Error(`[${stepName}] 重试后仍失败: ${lastError.message}`);
 }
 
+async function dismissTransientOverlays(page) {
+  const closeSelectors = [
+    'button[aria-label="关闭"]',
+    'button[aria-label="Close"]',
+    'button:has-text("关闭")',
+    'button:has-text("我知道了")',
+    'button:has-text("知道了")',
+    'button:has-text("×")',
+  ];
+
+  for (const selector of closeSelectors) {
+    const locator = page.locator(selector);
+    const count = await locator.count().catch(() => 0);
+    for (let index = 0; index < count; index += 1) {
+      const target = locator.nth(index);
+      if (!await target.isVisible().catch(() => false)) continue;
+      await target.click({ timeout: 1000 }).catch(() => {});
+      await page.waitForTimeout(200).catch(() => {});
+    }
+  }
+
+  await page.keyboard.press('Escape').catch(() => {});
+}
+
 async function largestVisibleTextarea(page, selector) {
   const candidates = page.locator(selector);
   const count = await candidates.count();
@@ -120,6 +152,8 @@ async function largestVisibleTextarea(page, selector) {
 }
 
 async function findHomeTextarea(page) {
+  await dismissTransientOverlays(page);
+
   await page.waitForFunction(
     () => Array.from(document.querySelectorAll('textarea')).some((element) => {
       const style = window.getComputedStyle(element);
@@ -143,6 +177,8 @@ async function findHomeTextarea(page) {
 }
 
 async function findVisibleChatInput(page) {
+  await dismissTransientOverlays(page);
+
   const inputs = page.locator(CHAT_INPUT_SELECTOR);
   await page.waitForFunction(
     (selector) => Array.from(document.querySelectorAll(selector)).some((element) => {
@@ -167,6 +203,8 @@ async function findVisibleChatInput(page) {
 }
 
 async function findVisibleButtonByExactText(page, text) {
+  await dismissTransientOverlays(page);
+
   const buttons = page.getByRole('button', { name: text, exact: true });
   await page.waitForFunction(
     (buttonText) => Array.from(document.querySelectorAll('button')).some((element) => {
@@ -197,9 +235,9 @@ async function clickButtonByExactText(page, text) {
   await button.click();
 }
 
-async function submitConfirmation(page) {
+async function submitChatMessage(page, message) {
   const input = await findVisibleChatInput(page);
-  await input.fill('确认');
+  await input.fill(message);
   await input.press('Enter');
 
   await page.waitForFunction(
@@ -218,6 +256,14 @@ async function submitConfirmation(page) {
     CHAT_INPUT_SELECTOR,
     { timeout: STEP_TIMEOUT_MS }
   );
+}
+
+async function submitCreateMode(page, mode) {
+  await submitChatMessage(page, mode);
+}
+
+async function submitConfirmation(page) {
+  await submitChatMessage(page, '确认');
 }
 
 async function waitForVideoProjectUrl(page) {
@@ -264,8 +310,8 @@ export async function createHuashengProject({ page, args, scriptText }) {
     await clickButtonByExactText(page, '创建');
   });
 
-  await runStepWithRetry(`点击${CREATE_MODE_TEXT}`, async () => {
-    await clickButtonByExactText(page, CREATE_MODE_TEXT);
+  await runStepWithRetry(`提交${args.mode}方案`, async () => {
+    await submitCreateMode(page, args.mode);
   });
 
   await runStepWithRetry('第一次提交确认', async () => {
