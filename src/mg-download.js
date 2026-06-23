@@ -214,10 +214,21 @@ async function waitForWebmBlobVideo(page, seenBlobUrls, timeout = 10000) {
         let size = 0;
         let header = '';
         try {
-          const response = await fetch(src);
-          const blob = await response.blob();
+          // 使用 XHR 替代 fetch，绕过页面 JS 对 fetch 的拦截
+          const xhrBlob = await new Promise((res, rej) => {
+            const xhr = new XMLHttpRequest();
+            xhr.open('GET', src);
+            xhr.responseType = 'blob';
+            xhr.onload = () => {
+              if (xhr.status === 200 || xhr.status === 0) res(xhr.response);
+              else rej(new Error(`XHR failed: ${xhr.status}`));
+            };
+            xhr.onerror = () => rej(new Error('XHR network error'));
+            xhr.send();
+          });
+          const blob = xhrBlob;
           const bytes = new Uint8Array(await blob.slice(0, 16).arrayBuffer());
-          mimeType = blob.type || response.headers.get('content-type') || '';
+          mimeType = blob.type || '';
           size = blob.size;
           header = Array.from(bytes).map((byte) => byte.toString(16).padStart(2, '0')).join(' ');
         } catch (error) {
@@ -297,10 +308,23 @@ async function waitForBlobVideoUrl(page, previousBlobUrls, timeout = 10000) {
 
 async function readBlobVideo(page, blobUrl) {
   const result = await page.evaluate(async (url) => {
-    const response = await fetch(url);
-    if (!response.ok) throw new Error(`fetch blob failed: ${response.status}`);
+    // 使用 XHR 替代 fetch，绕过页面 JS 对 fetch 的拦截
+    const xhrBlob = await new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('GET', url);
+      xhr.responseType = 'blob';
+      xhr.onload = () => {
+        if (xhr.status === 200 || xhr.status === 0) {
+          resolve({ blob: xhr.response, contentType: xhr.getResponseHeader('Content-Type') || '' });
+        } else {
+          reject(new Error(`XHR blob failed: ${xhr.status}`));
+        }
+      };
+      xhr.onerror = () => reject(new Error('XHR network error'));
+      xhr.send();
+    });
 
-    const blob = await response.blob();
+    const blob = xhrBlob.blob;
     const bytes = new Uint8Array(await blob.arrayBuffer());
     const chunkSize = 0x8000;
     const chunks = [];
@@ -314,7 +338,7 @@ async function readBlobVideo(page, blobUrl) {
     }
 
     return {
-      mimeType: blob.type || response.headers.get('content-type') || 'video/webm',
+      mimeType: blob.type || xhrBlob.contentType || 'video/webm',
       size: bytes.byteLength,
       chunks,
     };
