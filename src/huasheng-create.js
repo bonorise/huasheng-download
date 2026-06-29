@@ -63,6 +63,10 @@ export function normalizeScriptText(rawText) {
   return text;
 }
 
+export function createModePrompt(mode) {
+  return mode === 'B' ? '方案 B，确定只生成2 个 MG动画' : '方案 A';
+}
+
 export async function readScriptText(txtPath) {
   let rawText;
   try {
@@ -309,14 +313,14 @@ export async function createHuashengProject({ page, args, scriptText }) {
     await clickButtonByExactText(page, '创建');
   });
 
-  // 等 60s → 输入"确认 A 方案" 或 "确认 B 方案"
-  await runStepWithRetry(`提交${args.mode}方案确认`, async () => {
-    await waitAndSubmit(page, `确认 ${args.mode} 方案`, 60);
+  // 等 120s → 输入方案指令
+  await runStepWithRetry(`提交${args.mode}方案指令`, async () => {
+    await waitAndSubmit(page, createModePrompt(args.mode), 120);
   });
 
-  // 等 60s → 输入"确认"
+  // 等 120s → 输入"确认"
   await runStepWithRetry('第一次提交确认', async () => {
-    await waitAndSubmit(page, '确认', 60);
+    await waitAndSubmit(page, '确认', 120);
   });
 
   // 等待跳转到视频项目页（URL 跳转可靠）
@@ -324,9 +328,9 @@ export async function createHuashengProject({ page, args, scriptText }) {
     return waitForVideoProjectUrl(page);
   });
 
-  // 等 60s → 输入"确认"
+  // 等 120s → 输入"确认"
   await runStepWithRetry('第二次提交确认', async () => {
-    await waitAndSubmit(page, '确认', 60);
+    await waitAndSubmit(page, '确认', 120);
   });
 
   return projectUrl;

@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {
+  createModePrompt,
   isVideoProjectUrl,
   normalizeProjectUrl,
   normalizeScriptText,
@@ -48,6 +49,14 @@ test('parseCreateArgs rejects invalid create mode', () => {
     () => parseCreateArgs(['./input.txt', '--mode', 'C']),
     /--mode 只支持 A 或 B/
   );
+});
+
+test('createModePrompt returns pure video mode instruction for A', () => {
+  assert.equal(createModePrompt('A'), '方案 A');
+});
+
+test('createModePrompt returns MG mode instruction for B', () => {
+  assert.equal(createModePrompt('B'), '方案 B，确定只生成2 个 MG动画');
 });
 
 test('parseCreateArgs requires a txt path', () => {
