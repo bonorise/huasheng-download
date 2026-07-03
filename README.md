@@ -47,6 +47,12 @@ npm run download -- https://www.huasheng.cn/video/158889664548866
 
 默认会点击“收藏”tab，不按分镜循环。脚本会多轮提取、下载并取消成功下载素材的收藏，直到收藏列表清空或达到 `--limit`。下载失败的素材最多尝试两次；取消收藏失败的素材不会重复下载，但会在下一轮继续尝试取消收藏。
 
+如果只需要清空收藏星标，不下载素材：
+
+```bash
+npm run download -- --uncollect-only
+```
+
 如果要按分镜下载“推荐”素材：
 
 ```bash
@@ -110,6 +116,7 @@ npm run download -- https://www.huasheng.cn/video/158889664548866 --count 43
 --last-url <URL>    最后一个分镜 URL，用于推算分镜总数
 --tab <收藏|推荐>   素材来源，默认 收藏
 --limit <数量>      收藏模式表示本次运行总量；推荐模式表示每个分镜最多数量
+--uncollect-only    只取消收藏页星标，不下载素材
 --headless          无头模式，首次登录不建议使用
 --dry-run           只提取素材 URL，不下载
 --slow-mo <毫秒>    浏览器操作延迟，默认 80

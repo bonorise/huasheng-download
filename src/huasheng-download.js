@@ -20,6 +20,8 @@ export { materialUrlKey, pad2, writeFileExclusive };
 
 const DEFAULT_STOP_AFTER_EMPTY_SCROLLS = 3;
 const MAX_COLLECTION_DOWNLOAD_ATTEMPTS = 2;
+const MAX_UNCOLLECT_ONLY_ATTEMPTS = 2000;
+const MAX_UNCOLLECT_ONLY_PASSES = 100;
 const MATERIAL_CONTAINER_SELECTOR = '.ClipChoiceList_contentWrap__Ii6jf';
 const MODAL_CLOSE_SELECTOR = 'button[aria-label="关闭"]';
 const COLLECT_ICON_SELECTOR = '[class*="ClipChoiceItem_collectIconWrap__"]';
@@ -35,6 +37,7 @@ function parseArgs(argv) {
     lastUrl: '',
     limitPerScene: 0,
     dryRun: false,
+    uncollectOnly: false,
     slowMo: 80,
     tab: '收藏',
   };
@@ -47,6 +50,7 @@ function parseArgs(argv) {
     }
     if (arg === '--headless') args.headless = true;
     else if (arg === '--dry-run') args.dryRun = true;
+    else if (arg === '--uncollect-only') args.uncollectOnly = true;
     else if (arg === '--out') args.outDir = path.resolve(argv[++i]);
     else if (arg === '--profile') args.profileDir = path.resolve(argv[++i]);
     else if (arg === '--count') args.count = Number(argv[++i]);
@@ -75,6 +79,7 @@ function parseArgs(argv) {
   if (!SUPPORTED_TABS.has(args.tab)) {
     throw new Error('--tab 只支持 收藏 或 推荐。');
   }
+  if (args.uncollectOnly) args.tab = '收藏';
   return args;
 }
 
@@ -93,6 +98,7 @@ function printHelp() {
   --last-url <URL>    最后一个分镜 URL，用于推算分镜总数
   --tab <收藏|推荐>   素材来源，默认 收藏
   --limit <数量>      最多下载多少个素材；推荐模式下表示每个分镜最多数量
+  --uncollect-only    只取消收藏页星标，不下载素材
   --headless          无头模式。首次登录不建议使用
   --dry-run           只提取素材 URL，不下载
   --slow-mo <毫秒>    浏览器操作延迟，默认 80
@@ -450,6 +456,11 @@ async function scrollMaterialList(page) {
 async function openCollectionMaterialList(page, args) {
   await page.goto(args.url, { waitUntil: 'domcontentloaded', timeout: 60000 });
   await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+  if (!args.headless && await isProbablyLoggedOut(page)) {
+    await pauseForEnter('页面需要登录。请在打开的浏览器窗口中确认登录状态。');
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+  }
   await openMaterialPanel(page);
   await selectMaterialTab(page, '收藏');
   await materialContainer(page);
@@ -723,6 +734,31 @@ async function countCollectIconsInContainer(page) {
   });
 }
 
+async function findFirstCollectIconOnCurrentView(page) {
+  return page.evaluate(({ containerSelector, iconSelector }) => {
+    const container = document.querySelector(containerSelector);
+    if (!container) return { found: false, iconId: '', missing: true };
+
+    const containerRect = container.getBoundingClientRect();
+    const icons = Array.from(container.querySelectorAll(iconSelector));
+    for (const icon of icons) {
+      const rect = icon.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) continue;
+      if (rect.bottom <= containerRect.top || rect.top >= containerRect.bottom) continue;
+      if (rect.right <= containerRect.left || rect.left >= containerRect.right) continue;
+
+      const iconId = `hs_uncollect_icon_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+      icon.setAttribute('data-hs-uncollect-icon-id', iconId);
+      return { found: true, iconId, missing: false };
+    }
+
+    return { found: false, iconId: '', missing: false };
+  }, {
+    containerSelector: MATERIAL_CONTAINER_SELECTOR,
+    iconSelector: COLLECT_ICON_SELECTOR,
+  });
+}
+
 async function findCollectionCard(page, signature) {
   if (!signature?.coverKey) {
     throw new Error('收藏素材缺少封面定位特征');
@@ -746,16 +782,71 @@ async function findCollectionCard(page, signature) {
   throw new Error('查找收藏卡片超过最大滚动次数');
 }
 
+async function collectIconState(icon) {
+  return icon.evaluate((el) => {
+    const style = window.getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return {
+      className: el.getAttribute('class') || '',
+      opacity: Number(style.opacity || 0),
+      pointerEvents: style.pointerEvents,
+      display: style.display,
+      visibility: style.visibility,
+      width: rect.width,
+      height: rect.height,
+    };
+  }).catch(() => null);
+}
+
+function describeCollectIconState(state) {
+  if (!state) return '无法读取星标状态';
+  return `opacity=${state.opacity}, pointer-events=${state.pointerEvents}, display=${state.display}, visibility=${state.visibility}, class="${state.className}"`;
+}
+
+async function revealCollectIconAtPointer(page, icon) {
+  await icon.scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => {});
+
+  const box = await icon.boundingBox();
+  if (!box || box.width <= 0 || box.height <= 0) {
+    throw new Error('对应收藏卡片未找到星标按钮位置');
+  }
+
+  const point = {
+    x: box.x + box.width / 2,
+    y: box.y + box.height / 2,
+  };
+  let lastState = null;
+
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    await page.mouse.move(point.x, point.y);
+    await page.waitForTimeout(120);
+
+    lastState = await collectIconState(icon);
+    if (
+      lastState
+      && lastState.display !== 'none'
+      && lastState.visibility !== 'hidden'
+      && lastState.opacity > 0.05
+      && lastState.pointerEvents !== 'none'
+    ) {
+      return point;
+    }
+  }
+
+  throw new Error(`星标按钮未进入可点击状态: ${describeCollectIconState(lastState)}`);
+}
+
 async function uncollectMaterial(page, item) {
   const card = await findCollectionCard(page, item.collectionCard);
   if (!card) throw new Error('未找到对应收藏卡片');
 
   const icon = card.locator(COLLECT_ICON_SELECTOR).first();
-  const visible = await icon.isVisible({ timeout: 2000 }).catch(() => false);
-  if (!visible) throw new Error('对应收藏卡片未找到星标按钮');
+  const iconCount = await icon.count().catch(() => 0);
+  if (!iconCount) throw new Error('对应收藏卡片未找到星标按钮');
+  const clickPoint = await revealCollectIconAtPointer(page, icon);
 
   try {
-    await icon.click({ timeout: 3000 });
+    await page.mouse.click(clickPoint.x, clickPoint.y);
   } catch (error) {
     error.uncollectClickAttempted = true;
     throw error;
@@ -768,6 +859,76 @@ async function uncollectMaterial(page, item) {
     error.uncollectClickAttempted = true;
     throw error;
   }
+}
+
+async function uncollectFirstVisibleCollectionIcon(page) {
+  const match = await findFirstCollectIconOnCurrentView(page);
+  if (match.missing) {
+    throw new Error(`未找到推荐素材容器: ${MATERIAL_CONTAINER_SELECTOR}`);
+  }
+  if (!match.found) return false;
+
+  const icon = page.locator(`[data-hs-uncollect-icon-id="${match.iconId}"]`).first();
+  const clickPoint = await revealCollectIconAtPointer(page, icon);
+  await page.mouse.click(clickPoint.x, clickPoint.y);
+  await page.waitForTimeout(500);
+  return true;
+}
+
+async function uncollectVisibleCollectionsPass(page, args, passNumber) {
+  console.log(`\n[收藏] === 第 ${passNumber} 轮取消收藏 ===`);
+  console.log(`[收藏] 打开 ${args.url}`);
+  await openCollectionMaterialList(page, args);
+  await resetMaterialListScroll(page);
+
+  let uncollectedCount = 0;
+  let emptyScrolls = 0;
+
+  for (let attempt = 0; attempt < MAX_UNCOLLECT_ONLY_ATTEMPTS && emptyScrolls < DEFAULT_STOP_AFTER_EMPTY_SCROLLS; attempt += 1) {
+    const clicked = await uncollectFirstVisibleCollectionIcon(page);
+    if (clicked) {
+      uncollectedCount += 1;
+      emptyScrolls = 0;
+      console.log(`[收藏] 已取消收藏 ${uncollectedCount}`);
+      continue;
+    }
+
+    const scroll = await scrollMaterialList(page);
+    await page.waitForTimeout(800);
+    if (scroll.missing) {
+      throw new Error(`未找到推荐素材容器: ${MATERIAL_CONTAINER_SELECTOR}`);
+    }
+    if (scroll.after === scroll.before) {
+      emptyScrolls += 1;
+    } else {
+      emptyScrolls = 0;
+    }
+  }
+
+  const remaining = await countCollectIconsInContainer(page);
+  if (remaining > 0 || emptyScrolls < DEFAULT_STOP_AFTER_EMPTY_SCROLLS) {
+    console.warn(`[收藏] 第 ${passNumber} 轮已取消 ${uncollectedCount} 个，仍检测到 ${remaining} 个星标或达到安全上限`);
+  } else {
+    console.log(`[收藏] 第 ${passNumber} 轮滚动检查完成，已取消 ${uncollectedCount} 个收藏`);
+  }
+  return { uncollected: uncollectedCount };
+}
+
+async function uncollectAllVisibleCollections(page, args) {
+  let totalUncollected = 0;
+
+  for (let passNumber = 1; passNumber <= MAX_UNCOLLECT_ONLY_PASSES; passNumber += 1) {
+    const result = await uncollectVisibleCollectionsPass(page, args, passNumber);
+    totalUncollected += result.uncollected;
+
+    if (result.uncollected === 0) {
+      console.log(`[收藏] 全量取消收藏完成，共取消 ${totalUncollected} 个收藏`);
+      return { uncollected: totalUncollected };
+    }
+  }
+
+  console.warn(`[收藏] 已达到最大轮数 ${MAX_UNCOLLECT_ONLY_PASSES}，共取消 ${totalUncollected} 个收藏，可能仍有未加载收藏`);
+  return { uncollected: totalUncollected };
 }
 
 async function uncollectMaterialWithRecovery(page, item, args) {
@@ -892,6 +1053,10 @@ export async function downloadCollections(args, { page: existingPage, context: e
 
   try {
     await ensureDir(args.outDir);
+    if (args.uncollectOnly) {
+      await uncollectAllVisibleCollections(page, args);
+      return;
+    }
 
     if (args.tab === '收藏') {
       let passCount = 0;
@@ -1030,8 +1195,10 @@ export async function downloadCollections(args, { page: existingPage, context: e
       manifest.summary.uncollectFailed = manifest.items
         .filter((item) => item.uncollectStatus === 'failed').length;
     }
-    await writeJson(manifestPath, manifest).catch(() => {});
-    await writeJson(failuresPath, failures).catch(() => {});
+    if (!args.uncollectOnly) {
+      await writeJson(manifestPath, manifest).catch(() => {});
+      await writeJson(failuresPath, failures).catch(() => {});
+    }
     if (ownBrowser) await context.close();
   }
 

@@ -41,6 +41,15 @@ npm run download -- https://www.huasheng.cn/video/158889664548866 --last-url "ht
 - headless 模式下全部 MG blob 可能 `Failed to fetch`，疑似 blob 生命周期/渲染时序差异；如果 headless 全部失败，改用可见浏览器模式，不加 `--headless`，可加 `--slow-mo 80`。
 - 剪辑素材项目中应先下载全部视频素材，确认完毕后再下载 MG 动画；不要两个流程同时跑或先跑 MG。
 
+### 收藏页取消收藏星标 hover
+
+- 现象：收藏页视频素材下载完成后，脚本找到星标但无法自动取消收藏。
+- 根因：华声收藏星标 SVG 初始为 `opacity: 0; pointer-events: none;`，只有鼠标移动到星标热区后才出现 `ant-tooltip-open` 并变成可点击；直接 `locator.click()` 会点在隐藏/禁用元素上。
+- 解决：取消收藏时先滚动到卡片，读取星标 `boundingBox()`，用 `page.mouse.move()` 移到星标中心，等待 `opacity > 0.05` 且 `pointer-events !== "none"`，再用坐标点击。
+- 收藏列表是滚动/懒加载列表；只取消模式不能用当前 DOM 无星标判断清空，必须像素材提取一样持续滚动，连续空滚动后结束当前轮；清掉当前加载批次后还要重新打开收藏页做下一轮，直到某轮取消数量为 0。
+- 只清空收藏、不下载素材时运行：`npm run download -- --uncollect-only`。
+- 验证：`npm run check`、`npm test`。
+
 ### 创建项目 A/B 方案 — 纯定时操作（不依赖 DOM 检测）
 
 - 现象：华声创建视频项目时，提交文案后会先跳转到 `/video/<id>?clip=-1` 项目页，再继续在项目页输入框里接收 A/B 方案指令；页面 DOM 结构不透明，检测 A/B 按钮或内容生成停止都不可靠。
