@@ -99,8 +99,9 @@ function mgAnimationNumber(text) {
   return match ? Number(match[1]) : 0;
 }
 
-export function mgFilename(mgNumber) {
-  return `MG动画_${pad2(mgNumber)}.webm`;
+export function mgFilename(mgNumber, mimeType = '') {
+  const ext = /^video\/webm\b/i.test(mimeType) ? 'webm' : 'mp4';
+  return `MG动画_${pad2(mgNumber)}.${ext}`;
 }
 
 async function pauseForEnter(message) {
@@ -232,7 +233,8 @@ async function waitForWebmBlobVideo(page, seenBlobUrls, timeout = 10000) {
           size = blob.size;
           header = Array.from(bytes).map((byte) => byte.toString(16).padStart(2, '0')).join(' ');
         } catch (error) {
-          items.push({ src, error: error.message, score });
+          // XHR 读不了的 blob（已 revoke 或未就绪）不能作为候选返回，
+          // 否则下游 readBlobVideo 会对同一 URL 再次失败；继续轮询等可读的 webm
           continue;
         }
 
@@ -353,14 +355,21 @@ async function readBlobVideo(page, blobUrl) {
 
 async function captureMGBlob(page, button, seenBlobUrls) {
   const beforeClickBlobUrls = await currentBlobVideoUrls(page);
-  await button.click({ timeout: 3000 });
-  const candidate = await waitForWebmBlobVideo(page, seenBlobUrls);
-  if (!candidate) {
-    const newBlobUrl = await waitForBlobVideoUrl(page, new Set([...seenBlobUrls, ...beforeClickBlobUrls]), 1000);
-    throw new Error(newBlobUrl ? '找到新的 blob video，但不是 webm MG 动画' : '未找到 webm blob video 元素');
+  await button.click({ force: true, timeout: 3000 });
+  // 点击前已存在的 blob 一并排除，避免把旧预览视频误认为新 MG（与 fallback 分支保持一致）
+  const excludedBlobUrls = new Set([...seenBlobUrls, ...beforeClickBlobUrls]);
+  const candidate = await waitForWebmBlobVideo(page, excludedBlobUrls);
+  if (candidate) {
+    const blobVideo = await readBlobVideo(page, candidate.src);
+    return { ...blobVideo, blobUrl: candidate.src, candidate };
   }
-  const blobVideo = await readBlobVideo(page, candidate.src);
-  return { ...blobVideo, blobUrl: candidate.src, candidate };
+  // 回退：华声部分 MG 动画为 mp4 等非 webm 格式，仍应下载
+  const newBlobUrl = await waitForBlobVideoUrl(page, excludedBlobUrls, 3000);
+  if (newBlobUrl) {
+    const blobVideo = await readBlobVideo(page, newBlobUrl);
+    return { ...blobVideo, blobUrl: newBlobUrl, candidate: null };
+  }
+  throw new Error('未找到 blob video 元素');
 }
 
 async function extractMGAnimations(page, args) {
@@ -403,19 +412,27 @@ async function extractMGAnimations(page, args) {
       const mgNumber = mgAnimationNumber(buttonText);
       if (!mgNumber) continue;
 
-      const filename = mgFilename(mgNumber);
-      const filePath = path.join(args.outDir, filename);
-      try {
-        await fs.access(filePath);
+      // 检查是否已存在（webm 或 mp4 都算已下载）
+      const existingExts = ['.webm', '.mp4'];
+      let alreadyExists = false;
+      for (const ext of existingExts) {
+        try {
+          await fs.access(path.join(args.outDir, mgFilename(mgNumber, ext === '.webm' ? 'video/webm' : 'video/mp4')));
+          alreadyExists = true;
+          break;
+        } catch { /* 不存在 */ }
+      }
+      if (alreadyExists) {
         console.log(`[MG] 跳过 MG动画 ${pad2(mgNumber)} (已存在)`);
         continue;
-      } catch {
-        // 不存在，继续下载。
       }
 
       try {
         const result = await captureMGBlob(page, button, seenBlobUrls);
         seenBlobUrls.add(result.blobUrl);
+
+        const filename = mgFilename(mgNumber, result.mimeType);
+        const filePath = path.join(args.outDir, filename);
 
         console.log(`[MG] 捕获 MG动画 ${pad2(mgNumber)}: ${shortUrl(result.blobUrl)} (${(result.body.byteLength / 1024 / 1024).toFixed(1)} MB)`);
 
@@ -459,6 +476,9 @@ export async function downloadMGAnimations({ page, args }) {
 
   await page.goto(args.url, { waitUntil: 'domcontentloaded', timeout: 60000 });
   await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+
+  // 注入 CSS 强制显示 MG 按钮容器（华声改版后 .clip-card-box 伪元素拦截 hover 事件）
+  await page.addStyleTag({ content: '[class*="video-clip-"] .absolute.h-\\[24px\\] { display: flex !important; }' });
 
   if (!args.headless && await isProbablyLoggedOut(page)) {
     await pauseForEnter('页面需要登录。请在打开的浏览器窗口中确认登录状态。');
