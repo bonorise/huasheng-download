@@ -22,6 +22,7 @@ const DEFAULT_STOP_AFTER_EMPTY_SCROLLS = 3;
 const MAX_COLLECTION_DOWNLOAD_ATTEMPTS = 2;
 const MAX_UNCOLLECT_ONLY_ATTEMPTS = 2000;
 const MAX_UNCOLLECT_ONLY_PASSES = 100;
+const COLLECTION_LEDGER_FILE = 'collection-ledger.json';
 const MATERIAL_CONTAINER_SELECTOR = '.ClipChoiceList_contentWrap__Ii6jf';
 const MODAL_CLOSE_SELECTOR = 'button[aria-label="关闭"]';
 const COLLECT_ICON_SELECTOR = '[class*="ClipChoiceItem_collectIconWrap__"]';
@@ -201,6 +202,10 @@ export function shouldCleanupCollections({
     && downloadPhaseComplete;
 }
 
+export function shouldCountUncollectClick({ iconStillConnected }) {
+  return !iconStillConnected;
+}
+
 export async function writeCollectionVideo(outDir, body, startNumber) {
   let materialNumber = startNumber;
   while (true) {
@@ -228,6 +233,43 @@ export function collectionCleanupQueue(items, { tab, dryRun }) {
     dryRun,
     uncollectStatus: item.uncollectStatus,
   }));
+}
+
+export function mergeCollectionLedgerItems(existingItems, updatedItems) {
+  const indexBySourceKey = new Map();
+  const merged = [];
+
+  for (const item of [...existingItems, ...updatedItems]) {
+    if (!item?.sourceKey) continue;
+    const index = indexBySourceKey.get(item.sourceKey);
+    if (index === undefined) {
+      indexBySourceKey.set(item.sourceKey, merged.length);
+      merged.push(item);
+    } else {
+      merged[index] = item;
+    }
+  }
+
+  return merged;
+}
+
+async function loadCollectionLedger(ledgerPath) {
+  try {
+    const ledger = JSON.parse(await fs.readFile(ledgerPath, 'utf8'));
+    if (Array.isArray(ledger.items)) return ledger;
+    throw new Error('items 不是数组');
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      return { version: 1, items: [] };
+    }
+    throw new Error(`读取收藏永久台账失败: ${error.message}`);
+  }
+}
+
+async function saveCollectionLedger(ledgerPath, ledger) {
+  ledger.version = 1;
+  ledger.updatedAt = new Date().toISOString();
+  await writeJson(ledgerPath, ledger);
 }
 
 async function clickFirstVisibleText(page, labels, timeout = 2500) {
@@ -885,6 +927,10 @@ async function uncollectFirstVisibleCollectionIcon(page) {
   const clickPoint = await revealCollectIconAtPointer(page, icon);
   await page.mouse.click(clickPoint.x, clickPoint.y);
   await page.waitForTimeout(500);
+  const iconStillConnected = await icon.evaluate((el) => el.isConnected).catch(() => false);
+  if (!shouldCountUncollectClick({ iconStillConnected })) {
+    throw new Error('点击星标后目标收藏卡片仍在列表中，未确认取消成功');
+  }
   return true;
 }
 
@@ -986,16 +1032,18 @@ async function cleanupDownloadedCollections({
   page,
   args,
   manifest,
+  ledger,
   failures,
   manifestPath,
   failuresPath,
+  ledgerPath,
 }) {
   if (args.noUncollect) {
     console.log('[收藏] --no-uncollect：跳过统一取消收藏阶段');
     return { attempted: 0, uncollected: 0 };
   }
 
-  const queue = collectionCleanupQueue(manifest.items, {
+  const queue = collectionCleanupQueue(ledger.items, {
     tab: args.tab,
     dryRun: args.dryRun,
   });
@@ -1016,6 +1064,7 @@ async function cleanupDownloadedCollections({
     }
     await writeJson(manifestPath, manifest);
     await writeJson(failuresPath, failures);
+    await saveCollectionLedger(ledgerPath, ledger);
     console.warn(`[收藏] 取消收藏阶段未启动: ${error.message}`);
     return { attempted: queue.length, uncollected: 0 };
   }
@@ -1040,6 +1089,7 @@ async function cleanupDownloadedCollections({
 
     await writeJson(manifestPath, manifest);
     await writeJson(failuresPath, failures);
+    await saveCollectionLedger(ledgerPath, ledger);
   }
   return { attempted: queue.length, uncollected: uncollectedCount };
 }
@@ -1059,6 +1109,7 @@ export async function downloadCollections(args, { page: existingPage, context: e
 
   const manifestPath = path.join(args.outDir, 'manifest.json');
   const failuresPath = path.join(args.outDir, 'failures.json');
+  const ledgerPath = path.join(args.outDir, COLLECTION_LEDGER_FILE);
   const manifest = {
     startedAt: new Date().toISOString(),
     projectUrl: args.url,
@@ -1068,9 +1119,13 @@ export async function downloadCollections(args, { page: existingPage, context: e
     items: [],
   };
   const failures = [];
+  let collectionLedger = { version: 1, items: [] };
 
   try {
     await ensureDir(args.outDir);
+    if (args.tab === '收藏') {
+      collectionLedger = await loadCollectionLedger(ledgerPath);
+    }
     if (args.uncollectOnly) {
       await uncollectAllVisibleCollections(page, args);
       return;
@@ -1078,7 +1133,7 @@ export async function downloadCollections(args, { page: existingPage, context: e
 
     if (args.tab === '收藏') {
       let passCount = 0;
-      const downloadedVideoKeys = new Set();
+      const downloadedVideoKeys = successfulMaterialKeys(collectionLedger.items);
       const downloadAttempts = new Map();
       const existingFileNames = await fs.readdir(args.outDir);
       let nextMaterialNumber = nextCollectionMaterialNumber(existingFileNames);
@@ -1121,9 +1176,11 @@ export async function downloadCollections(args, { page: existingPage, context: e
             context,
             args,
             manifest,
+            ledger: collectionLedger,
             failures,
             manifestPath,
             failuresPath,
+            ledgerPath,
             referer: args.url,
             label: '收藏',
           });
@@ -1177,9 +1234,11 @@ export async function downloadCollections(args, { page: existingPage, context: e
           page,
           args,
           manifest,
+          ledger: collectionLedger,
           failures,
           manifestPath,
           failuresPath,
+          ledgerPath,
         });
       } else if (args.noUncollect) {
         console.log('[收藏] --no-uncollect：全部下载阶段已结束，跳过取消收藏');
@@ -1235,7 +1294,7 @@ export async function downloadCollections(args, { page: existingPage, context: e
   console.log(`输出目录: ${args.outDir}`);
 }
 
-async function processMaterials({ materials, context, args, manifest, failures, manifestPath, failuresPath, referer, label }) {
+async function processMaterials({ materials, context, args, manifest, ledger, failures, manifestPath, failuresPath, ledgerPath, referer, label }) {
   const processedRecords = [];
   if (materials.extractionFailures?.length) {
     failures.push(...materials.extractionFailures);
@@ -1283,6 +1342,10 @@ async function processMaterials({ materials, context, args, manifest, failures, 
     processedRecords.push(record);
     await writeJson(manifestPath, manifest);
     await writeJson(failuresPath, failures);
+    if (args.tab === '收藏' && record.status === 'downloaded') {
+      ledger.items = mergeCollectionLedgerItems(ledger.items, [record]);
+      await saveCollectionLedger(ledgerPath, ledger);
+    }
   }
   return processedRecords;
 }

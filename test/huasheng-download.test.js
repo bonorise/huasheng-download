@@ -8,6 +8,7 @@ import {
   collectionCardSignature,
   collectionCleanupQueue,
   collectionMaterialsForPass,
+  mergeCollectionLedgerItems,
   materialSourceKey,
   materialUrlKey,
   nextCollectionMaterialNumber,
@@ -18,6 +19,7 @@ import {
   shouldUncollectMaterial,
   shouldContinueCollectionLoop,
   shouldCleanupCollections,
+  shouldCountUncollectClick,
   successfulMaterialKeys,
   writeCollectionVideo,
   writeFileExclusive,
@@ -48,6 +50,11 @@ test('收藏清理只能在全部下载阶段结束后启动', () => {
     noUncollect: true,
     downloadPhaseComplete: true,
   }), false);
+});
+
+test('只有目标星标从 DOM 移除后才计为取消收藏成功', () => {
+  assert.equal(shouldCountUncollectClick({ iconStillConnected: false }), true);
+  assert.equal(shouldCountUncollectClick({ iconStillConnected: true }), false);
 });
 
 test('pad2 formats scene and material numbers', () => {
@@ -128,6 +135,33 @@ test('collectionCleanupQueue only returns downloaded collection records', () => 
   );
   assert.deepEqual(collectionCleanupQueue(items, { tab: '收藏', dryRun: true }), []);
   assert.deepEqual(collectionCleanupQueue(items, { tab: '推荐', dryRun: false }), []);
+});
+
+test('收藏永久台账保留旧下载，并更新同一素材的取消状态', () => {
+  const oldItem = {
+    sourceKey: 'https://cdn.example.com/old.mp4',
+    status: 'downloaded',
+    uncollectStatus: 'failed',
+    collectionCard: { coverKey: 'old-cover', cardText: '旧素材' },
+  };
+  const updatedItem = {
+    ...oldItem,
+    uncollectStatus: 'uncollected',
+  };
+  const nextItem = {
+    sourceKey: 'https://cdn.example.com/new.mp4',
+    status: 'downloaded',
+    uncollectStatus: 'skipped',
+    collectionCard: { coverKey: 'new-cover', cardText: '新素材' },
+  };
+
+  const merged = mergeCollectionLedgerItems([oldItem], [updatedItem, nextItem]);
+
+  assert.deepEqual(merged, [updatedItem, nextItem]);
+  assert.deepEqual(
+    collectionCleanupQueue(merged, { tab: '收藏', dryRun: false }),
+    [nextItem]
+  );
 });
 
 test('nextCollectionMaterialNumber continues after the largest existing collection file', () => {
