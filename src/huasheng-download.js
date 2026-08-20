@@ -38,6 +38,7 @@ function parseArgs(argv) {
     limitPerScene: 0,
     dryRun: false,
     uncollectOnly: false,
+    noUncollect: false,
     slowMo: 80,
     tab: '收藏',
   };
@@ -51,6 +52,7 @@ function parseArgs(argv) {
     if (arg === '--headless') args.headless = true;
     else if (arg === '--dry-run') args.dryRun = true;
     else if (arg === '--uncollect-only') args.uncollectOnly = true;
+    else if (arg === '--no-uncollect') args.noUncollect = true;
     else if (arg === '--out') args.outDir = path.resolve(argv[++i]);
     else if (arg === '--profile') args.profileDir = path.resolve(argv[++i]);
     else if (arg === '--count') args.count = Number(argv[++i]);
@@ -99,6 +101,7 @@ function printHelp() {
   --tab <收藏|推荐>   素材来源，默认 收藏
   --limit <数量>      最多下载多少个素材；推荐模式下表示每个分镜最多数量
   --uncollect-only    只取消收藏页星标，不下载素材
+  --no-uncollect      只下载素材，不取消收藏（下载全部完成后可单独 --uncollect-only 统一取消收藏）
   --headless          无头模式。首次登录不建议使用
   --dry-run           只提取素材 URL，不下载
   --slow-mo <毫秒>    浏览器操作延迟，默认 80
@@ -180,12 +183,22 @@ export function collectionMaterialsForPass(materials, {
 
 export function shouldContinueCollectionLoop({
   successfulDownloadCount,
-  uncollectedCount,
   hasRetryableVisibleMaterial,
 }) {
   return successfulDownloadCount > 0
-    || uncollectedCount > 0
     || hasRetryableVisibleMaterial;
+}
+
+export function shouldCleanupCollections({
+  tab,
+  dryRun,
+  noUncollect,
+  downloadPhaseComplete,
+}) {
+  return tab === '收藏'
+    && !dryRun
+    && !noUncollect
+    && downloadPhaseComplete;
 }
 
 export async function writeCollectionVideo(outDir, body, startNumber) {
@@ -977,6 +990,11 @@ async function cleanupDownloadedCollections({
   manifestPath,
   failuresPath,
 }) {
+  if (args.noUncollect) {
+    console.log('[收藏] --no-uncollect：跳过统一取消收藏阶段');
+    return { attempted: 0, uncollected: 0 };
+  }
+
   const queue = collectionCleanupQueue(manifest.items, {
     tab: args.tab,
     dryRun: args.dryRun,
@@ -1121,14 +1139,6 @@ export async function downloadCollections(args, { page: existingPage, context: e
         }
 
         await writeJson(manifestPath, manifest);
-        const cleanupResult = await cleanupDownloadedCollections({
-          page,
-          args,
-          manifest,
-          failures,
-          manifestPath,
-          failuresPath,
-        });
 
         if (args.dryRun) {
           console.log('[收藏] dry-run 提取完成');
@@ -1149,12 +1159,30 @@ export async function downloadCollections(args, { page: existingPage, context: e
         ));
         if (!shouldContinueCollectionLoop({
           successfulDownloadCount,
-          uncollectedCount: cleanupResult.uncollected,
           hasRetryableVisibleMaterial,
         })) {
           console.log('[收藏] 当前可见素材均已处理，结束本次运行');
           break;
         }
+      }
+
+      if (shouldCleanupCollections({
+        tab: args.tab,
+        dryRun: args.dryRun,
+        noUncollect: args.noUncollect,
+        downloadPhaseComplete: true,
+      })) {
+        console.log('\n[收藏] 全部下载阶段已结束，现在开始统一取消收藏');
+        await cleanupDownloadedCollections({
+          page,
+          args,
+          manifest,
+          failures,
+          manifestPath,
+          failuresPath,
+        });
+      } else if (args.noUncollect) {
+        console.log('[收藏] --no-uncollect：全部下载阶段已结束，跳过取消收藏');
       }
     } else {
       const scenes = await discoverScenes(page, args);

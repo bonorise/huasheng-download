@@ -17,10 +17,38 @@ import {
   sceneUrl,
   shouldUncollectMaterial,
   shouldContinueCollectionLoop,
+  shouldCleanupCollections,
   successfulMaterialKeys,
   writeCollectionVideo,
   writeFileExclusive,
 } from '../src/huasheng-download.js';
+
+test('收藏清理只能在全部下载阶段结束后启动', () => {
+  assert.equal(shouldCleanupCollections({
+    tab: '收藏',
+    dryRun: false,
+    noUncollect: false,
+    downloadPhaseComplete: false,
+  }), false);
+  assert.equal(shouldCleanupCollections({
+    tab: '收藏',
+    dryRun: false,
+    noUncollect: false,
+    downloadPhaseComplete: true,
+  }), true);
+  assert.equal(shouldCleanupCollections({
+    tab: '收藏',
+    dryRun: true,
+    noUncollect: false,
+    downloadPhaseComplete: true,
+  }), false);
+  assert.equal(shouldCleanupCollections({
+    tab: '收藏',
+    dryRun: false,
+    noUncollect: true,
+    downloadPhaseComplete: true,
+  }), false);
+});
 
 test('pad2 formats scene and material numbers', () => {
   assert.equal(pad2(1), '01');
@@ -180,12 +208,12 @@ test('collectionMaterialsForPass retries failures without repeating successful d
   assert.deepEqual(selected, [materials[1]]);
 });
 
-test('shouldContinueCollectionLoop treats successful uncollect as progress', () => {
+test('下载循环进展不依赖取消收藏结果', () => {
   assert.equal(shouldContinueCollectionLoop({
     successfulDownloadCount: 0,
     uncollectedCount: 1,
     hasRetryableVisibleMaterial: false,
-  }), true);
+  }), false);
   assert.equal(shouldContinueCollectionLoop({
     successfulDownloadCount: 0,
     uncollectedCount: 0,
