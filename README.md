@@ -45,7 +45,7 @@ npm run create -- /绝对路径/文案.txt --mode B
 npm run download -- https://www.huasheng.cn/video/158889664548866
 ```
 
-默认会点击“收藏”tab，不按分镜循环。脚本先完成全部收藏素材的提取和下载，下载阶段不会取消收藏；确认下载扫描结束或达到 `--limit` 后，再统一取消本次成功下载素材的收藏。下载失败的素材最多尝试两次。
+默认会点击“收藏”tab，不按分镜循环。脚本只完整扫描收藏页一次，先统一下载，再仅对本次扫描且下载成功的素材取消收藏，随后结束。下载失败会写入 `failures.json` 并保留收藏，不会通过重新扫描整页来重试。
 
 每个输出目录还会保存 `collection-ledger.json` 作为跨运行的永久台账。即使 `manifest.json` 被后续空检查覆盖，已下载但未取消收藏的素材仍会在下次运行补清理，已下载 URL 也不会再次写入。
 
@@ -124,3 +124,13 @@ npm run download -- https://www.huasheng.cn/video/158889664548866 --count 43
 --dry-run           只提取素材 URL，不下载
 --slow-mo <毫秒>    浏览器操作延迟，默认 80
 ```
+
+## 供 Agent 调用
+
+Claude Code、Hermes 及其他 Agent 应直接调用此 CLI，不需要复制或改写下载逻辑。可在任意工作目录执行：
+
+```bash
+npm --prefix /Users/liubo/Desktop/PROJECT/00tools/huasheng-download run download -- '<华声项目URL>' --out '<绝对输出目录>'
+```
+
+检查但不修改收藏状态时加 `--dry-run`；下载但不取消收藏时加 `--no-uncollect`。

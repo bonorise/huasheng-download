@@ -7,13 +7,16 @@ import {
   assignCollectionMaterialNumbers,
   collectionCardSignature,
   collectionCleanupQueue,
+  collectionCleanupScope,
   collectionMaterialsForPass,
   mergeCollectionLedgerItems,
   materialSourceKey,
+  materialCandidateKey,
   materialUrlKey,
   nextCollectionMaterialNumber,
   pad2,
   remainingCollectionLimit,
+  selectScrollableTarget,
   sceneNumberFromUrl,
   sceneUrl,
   shouldUncollectMaterial,
@@ -99,6 +102,13 @@ test('materialSourceKey normalizes image and CSS background sources', () => {
   );
 });
 
+test('虚拟列表中同一素材移动位置后仍视为同一候选', () => {
+  assert.equal(
+    materialCandidateKey({ src: 'https://cdn.example.com/a.jpg?token=1', cardText: ' 人物  空镜 ' }),
+    materialCandidateKey({ src: 'https://cdn.example.com/a.jpg?token=2', cardText: '人物 空镜' })
+  );
+});
+
 test('collectionCardSignature keeps stable cover and card text features', () => {
   assert.deepEqual(
     collectionCardSignature({
@@ -137,6 +147,12 @@ test('collectionCleanupQueue only returns downloaded collection records', () => 
   assert.deepEqual(collectionCleanupQueue(items, { tab: '推荐', dryRun: false }), []);
 });
 
+test('取消收藏只限于本次扫描到的素材', () => {
+  const current = [{ key: 'current' }];
+  const ledger = [{ sourceKey: 'old' }, { sourceKey: 'current' }];
+  assert.deepEqual(collectionCleanupScope(ledger, current), [ledger[1]]);
+});
+
 test('收藏永久台账保留旧下载，并更新同一素材的取消状态', () => {
   const oldItem = {
     sourceKey: 'https://cdn.example.com/old.mp4',
@@ -162,6 +178,16 @@ test('收藏永久台账保留旧下载，并更新同一素材的取消状态',
     collectionCleanupQueue(merged, { tab: '收藏', dryRun: false }),
     [nextItem]
   );
+});
+
+test('优先选择实际可滚动的 InfiniteList 容器', () => {
+  assert.equal(selectScrollableTarget([
+    { id: '旧素材容器', scrollHeight: 480, clientHeight: 480 },
+    { id: 'InfiniteList', scrollHeight: 2400, clientHeight: 480 },
+  ]), 'InfiniteList');
+  assert.equal(selectScrollableTarget([
+    { id: '首屏', scrollHeight: 480, clientHeight: 480 },
+  ]), '首屏');
 });
 
 test('nextCollectionMaterialNumber continues after the largest existing collection file', () => {
@@ -242,7 +268,7 @@ test('collectionMaterialsForPass retries failures without repeating successful d
   assert.deepEqual(selected, [materials[1]]);
 });
 
-test('下载循环进展不依赖取消收藏结果', () => {
+test('收藏页只执行一次完整提取，不因下载成功或失败重新扫描', () => {
   assert.equal(shouldContinueCollectionLoop({
     successfulDownloadCount: 0,
     uncollectedCount: 1,
@@ -252,7 +278,7 @@ test('下载循环进展不依赖取消收藏结果', () => {
     successfulDownloadCount: 0,
     uncollectedCount: 0,
     hasRetryableVisibleMaterial: true,
-  }), true);
+  }), false);
   assert.equal(shouldContinueCollectionLoop({
     successfulDownloadCount: 0,
     uncollectedCount: 0,

@@ -135,6 +135,10 @@ export function materialSourceKey(rawSource) {
   return materialUrlKey(source);
 }
 
+export function materialCandidateKey({ src, cardText }) {
+  return `${materialSourceKey(src)}|${String(cardText || '').replace(/\s+/g, ' ').trim()}`;
+}
+
 export function collectionCardSignature({ src, cardText = '' }) {
   return {
     coverKey: materialSourceKey(src),
@@ -183,11 +187,10 @@ export function collectionMaterialsForPass(materials, {
 }
 
 export function shouldContinueCollectionLoop({
-  successfulDownloadCount,
-  hasRetryableVisibleMaterial,
+  successfulDownloadCount: _successfulDownloadCount,
+  hasRetryableVisibleMaterial: _hasRetryableVisibleMaterial,
 }) {
-  return successfulDownloadCount > 0
-    || hasRetryableVisibleMaterial;
+  return false;
 }
 
 export function shouldCleanupCollections({
@@ -204,6 +207,12 @@ export function shouldCleanupCollections({
 
 export function shouldCountUncollectClick({ iconStillConnected }) {
   return !iconStillConnected;
+}
+
+export function selectScrollableTarget(targets) {
+  return targets.find((target) => target.scrollHeight > target.clientHeight)?.id
+    || targets[0]?.id
+    || '';
 }
 
 export async function writeCollectionVideo(outDir, body, startNumber) {
@@ -233,6 +242,11 @@ export function collectionCleanupQueue(items, { tab, dryRun }) {
     dryRun,
     uncollectStatus: item.uncollectStatus,
   }));
+}
+
+export function collectionCleanupScope(ledgerItems, scannedMaterials) {
+  const scannedKeys = new Set(scannedMaterials.map((material) => material.key));
+  return ledgerItems.filter((item) => scannedKeys.has(item.sourceKey));
 }
 
 export function mergeCollectionLedgerItems(existingItems, updatedItems) {
@@ -407,17 +421,23 @@ async function markVisibleMaterialCandidates(page, seenKeys) {
 
       const style = window.getComputedStyle(el);
       const src = el.currentSrc || el.src || style.backgroundImage || '';
-      const key = `${src}|${Math.round(rect.left)}|${Math.round(rect.top)}|${Math.round(rect.width)}x${Math.round(rect.height)}`;
-      if (seenSet.has(key)) continue;
-      const id = `hs_candidate_${Date.now()}_${candidates.length}`;
       const card = collectionCardFor(el);
+      const normalizedSource = String(src || '')
+        .trim()
+        .replace(/^url\((['"]?)(.*?)\1\)$/i, '$2')
+        .split('?')[0];
+      const cardText = (card?.textContent || '').replace(/\s+/g, ' ').trim();
+      const key = `${normalizedSource}|${cardText}`;
+      if (seenSet.has(key)) continue;
+      seenSet.add(key);
+      const id = `hs_candidate_${Date.now()}_${candidates.length}`;
       el.setAttribute('data-hs-candidate-id', id);
       candidates.push({
         id,
         key,
         tag: el.tagName.toLowerCase(),
         src,
-        cardText: card?.textContent || '',
+        cardText,
         x: Math.round(rect.left),
         y: Math.round(rect.top),
         width: Math.round(rect.width),
@@ -492,20 +512,70 @@ async function closeMaterialModal(page) {
   }
 }
 
-async function scrollMaterialList(page) {
-  return page.evaluate((selector) => {
-    const container = document.querySelector(selector);
-    if (!container) return { before: 0, after: 0, max: 0, missing: true };
-    const before = container.scrollTop;
-    const amount = Math.max(160, Math.floor(container.clientHeight * 0.75));
-    container.scrollBy({ top: amount, behavior: 'instant' });
+async function scrollMaterialList(page, { reset = false } = {}) {
+  const scroll = await page.evaluate(({ selector, collectIconSelector, resetToTop }) => {
+    const materialContainer = document.querySelector(selector);
+    if (!materialContainer) return { before: 0, after: 0, max: 0, missing: true };
+
+    const targets = [];
+    const addTarget = (element) => {
+      if (element && !targets.includes(element)) targets.push(element);
+    };
+    let current = materialContainer;
+    for (let depth = 0; current && depth < 8; depth += 1, current = current.parentElement) {
+      addTarget(current);
+    }
+    for (const element of document.querySelectorAll('[class*="InfiniteList_scrollRef__"]')) {
+      if (element.querySelector(collectIconSelector)) addTarget(element);
+    }
+
+    const target = targets.find((element) => element.scrollHeight > element.clientHeight)
+      || targets[0];
+    if (!target) return { before: 0, after: 0, max: 0, missing: true };
+
+    const before = target.scrollTop;
+    const amount = Math.max(160, Math.floor(target.clientHeight * 0.75));
+    if (resetToTop) {
+      target.scrollTop = 0;
+    } else {
+      target.scrollBy({ top: amount, behavior: 'instant' });
+      target.dispatchEvent(new Event('scroll', { bubbles: true }));
+    }
+    const rect = target.getBoundingClientRect();
     return {
       before,
-      after: container.scrollTop,
-      max: container.scrollHeight - container.clientHeight,
+      after: target.scrollTop,
+      max: target.scrollHeight - target.clientHeight,
+      amount,
+      x: rect.left + rect.width / 2,
+      y: rect.top + rect.height / 2,
       missing: false,
     };
-  }, MATERIAL_CONTAINER_SELECTOR);
+  }, {
+    selector: MATERIAL_CONTAINER_SELECTOR,
+    collectIconSelector: COLLECT_ICON_SELECTOR,
+    resetToTop: reset,
+  });
+
+  if (!reset && !scroll.missing && scroll.after === scroll.before && scroll.max > 0) {
+    await page.mouse.move(scroll.x, scroll.y);
+    await page.mouse.wheel(0, scroll.amount);
+    await page.waitForTimeout(100);
+    return page.evaluate(({ selector, collectIconSelector, before }) => {
+      const materialContainer = document.querySelector(selector);
+      const target = Array.from(document.querySelectorAll('[class*="InfiniteList_scrollRef__"]'))
+        .find((element) => element.querySelector(collectIconSelector) && element.scrollHeight > element.clientHeight)
+        || materialContainer;
+      return {
+        before,
+        after: target?.scrollTop || 0,
+        max: target ? target.scrollHeight - target.clientHeight : 0,
+        missing: !target,
+      };
+    }, { selector: MATERIAL_CONTAINER_SELECTOR, collectIconSelector: COLLECT_ICON_SELECTOR, before: scroll.before });
+  }
+
+  return scroll;
 }
 
 async function openCollectionMaterialList(page, args) {
@@ -771,10 +841,7 @@ async function findCollectionCardOnCurrentView(page, signature) {
 }
 
 async function resetMaterialListScroll(page) {
-  await page.evaluate((selector) => {
-    const container = document.querySelector(selector);
-    if (container) container.scrollTop = 0;
-  }, MATERIAL_CONTAINER_SELECTOR);
+  await scrollMaterialList(page, { reset: true });
   await page.waitForTimeout(300);
 }
 
@@ -1037,13 +1104,14 @@ async function cleanupDownloadedCollections({
   manifestPath,
   failuresPath,
   ledgerPath,
+  scopedItems = ledger.items,
 }) {
   if (args.noUncollect) {
     console.log('[收藏] --no-uncollect：跳过统一取消收藏阶段');
     return { attempted: 0, uncollected: 0 };
   }
 
-  const queue = collectionCleanupQueue(ledger.items, {
+  const queue = collectionCleanupQueue(scopedItems, {
     tab: args.tab,
     dryRun: args.dryRun,
   });
@@ -1138,6 +1206,7 @@ export async function downloadCollections(args, { page: existingPage, context: e
       const existingFileNames = await fs.readdir(args.outDir);
       let nextMaterialNumber = nextCollectionMaterialNumber(existingFileNames);
       let downloadedCount = 0;
+      let scannedCollectionMaterials = [];
 
       console.log(`[收藏] 新素材将从 素材${pad2(nextMaterialNumber)}.mp4 开始编号`);
 
@@ -1152,6 +1221,7 @@ export async function downloadCollections(args, { page: existingPage, context: e
         console.log(`\n[收藏] === 第 ${passCount} 轮提取 ===`);
 
         const materials = await extractCollectionMaterials(page, args);
+        scannedCollectionMaterials = materials;
         const selectedMaterials = collectionMaterialsForPass(materials, {
           downloadedVideoKeys,
           downloadAttempts,
@@ -1239,6 +1309,7 @@ export async function downloadCollections(args, { page: existingPage, context: e
           manifestPath,
           failuresPath,
           ledgerPath,
+          scopedItems: collectionCleanupScope(collectionLedger.items, scannedCollectionMaterials),
         });
       } else if (args.noUncollect) {
         console.log('[收藏] --no-uncollect：全部下载阶段已结束，跳过取消收藏');

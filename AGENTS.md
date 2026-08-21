@@ -20,6 +20,14 @@
 npm run download -- https://www.huasheng.cn/video/158889664548866
 ```
 
+从任意目录供 Claude Code、Hermes 或其他 Agent 调用：
+
+```bash
+npm --prefix /Users/liubo/Desktop/PROJECT/00tools/huasheng-download run download -- '<华声项目URL>' --out '<绝对输出目录>'
+```
+
+Agent 必须调用现有 CLI，不得为单次任务临时改写下载流程。
+
 如果自动发现分镜不完整：
 
 ```bash
@@ -62,6 +70,13 @@ npm run download -- https://www.huasheng.cn/video/158889664548866 --last-url "ht
 - `manifest.json` 仅表示本次运行，允许被下一次检查覆盖，禁止用它作为历史下载和取消收藏的唯一依据。
 - 收藏模式成功下载后必须追加写入 `<out>/collection-ledger.json`，至少保留 `sourceKey`、收藏卡片特征、下载状态和取消收藏状态；每次取消结果也必须立即回写该台账。
 - 后续运行应从台账读取未取消项补清理，并跳过已下载 URL，避免“本地已下载但因 manifest 被覆盖而漏取消”或重复下载。
+
+### 收藏页虚拟列表下载流程
+
+- 收藏素材位于 `[class*="InfiniteList_scrollRef__"]` 的独立滚动容器，不能只滚动外层 `ClipChoiceList` 容器。
+- 正常流程固定为：单次从顶部滚动到底部并提取全部素材 → 统一下载 → 仅对本次扫描且下载成功的素材取消收藏 → 结束；禁止重新打开收藏页进行无限补漏。
+- 虚拟列表会改变卡片屏幕坐标，候选素材去重键不能包含坐标；使用去除签名参数的封面 URL 与卡片文本。
+- 验证：`node --test test/huasheng-download.test.js`、`npm run check`、`npm test`。
 
 ### 创建项目 A/B 方案 — 纯定时操作（不依赖 DOM 检测）
 

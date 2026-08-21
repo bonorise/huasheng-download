@@ -29,8 +29,10 @@ npm run mg-download -- <URL> # 下载 MG 动画 (webm)
 收藏模式流程：
 
 ```text
-滚动提取 → 下载 → 取消收藏 → 重开列表 → 循环至收藏为空
+单次从顶部滚动到底部并提取全部 → 统一下载 → 仅取消本次扫描且下载成功项 → 结束
 ```
+
+禁止为“补漏”重新打开收藏页并循环扫描；虚拟列表会重排卡片，这会导致无限滚动。真实滚动节点是 `InfiniteList_scrollRef__*`，候选去重不得使用屏幕坐标。
 
 核心流程：
 1. `discoverScenes()` — 从页面 `<a href>` 和文本中推断分镜总数
@@ -89,3 +91,13 @@ npm run mg-download -- <URL> # 下载 MG 动画 (webm)
 - 只有下载成功的素材才能取消收藏（huasheng-download）
 - 真实下载会修改远端收藏状态，必须在用户明确要求后执行
 - 启动下载后持续观察直到进程结束
+
+## Agent 统一调用
+
+Claude Code、Hermes 或其他 Agent 都应调用现有 CLI，不得临时改写流程。不在项目目录时使用：
+
+```bash
+npm --prefix /Users/liubo/Desktop/PROJECT/00tools/huasheng-download run download -- '<华声项目URL>' --out '<绝对输出目录>'
+```
+
+调用前确认用户已授权真实下载及取消收藏；只检查时加 `--dry-run`，仅下载不取消收藏时加 `--no-uncollect`。
