@@ -49,14 +49,14 @@ npm run download -- https://www.huasheng.cn/video/158889664548866 --last-url "ht
 - headless 模式下全部 MG blob 可能 `Failed to fetch`，疑似 blob 生命周期/渲染时序差异；如果 headless 全部失败，改用可见浏览器模式，不加 `--headless`，可加 `--slow-mo 80`。
 - 剪辑素材项目中应先下载全部视频素材，确认完毕后再下载 MG 动画；不要两个流程同时跑或先跑 MG。
 
-### 收藏页取消收藏星标 hover
+### 收藏页取消收藏必须走接口，禁止点击星标
 
-- 现象：收藏页视频素材下载完成后，脚本找到星标但无法自动取消收藏。
-- 根因：华声收藏星标 SVG 初始为 `opacity: 0; pointer-events: none;`，只有鼠标移动到星标热区后才出现 `ant-tooltip-open` 并变成可点击；直接 `locator.click()` 会点在隐藏/禁用元素上。
-- 解决：取消收藏时先滚动到卡片，读取星标 `boundingBox()`，用 `page.mouse.move()` 移到星标中心，等待 `opacity > 0.05` 且 `pointer-events !== "none"`，再用坐标点击。
-- 收藏列表是滚动/懒加载列表；只取消模式不能用当前 DOM 无星标判断清空，必须像素材提取一样持续滚动，连续空滚动后结束当前轮；清掉当前加载批次后还要重新打开收藏页做下一轮，直到某轮取消数量为 0。
-- 只清空收藏、不下载素材时运行：`npm run download -- --uncollect-only`。
-- 验证：`npm run check`、`npm test`。
+- 现象：旧流程的坐标点击有时没有发出网络请求，但虚拟列表会回收或重排卡片，导致脚本误以为已经取消；下一项目仍会下载上次遗留收藏。
+- 根因：星标受 hover、透明度、`pointer-events` 和虚拟 DOM 生命周期影响，DOM 消失不能证明服务端状态已改变。
+- 解决：捕获收藏列表 `/api/innovideo/clip/video/favorite` 请求后，读取全部 `videos[].id`；使用同一请求的 `_ra`、`_bs`、`_fv` 参数及 `bili_jct` CSRF，向 `/api/innovideo/clip/video/fav` 发送 JSON：`{"clip_uuid":"<id>","fav":0,"is_revoke":false}`。并发数保持克制，单条失败自动重试。
+- 成功标准：取消后重新分页读取收藏接口；仅当目标记录全部消失，`--uncollect-only` 模式下还必须 `total=0`，才算完成。不得再以卡片 DOM 或星标数量作为成功依据。
+- 只清空收藏、不下载素材：`npm run download -- --uncollect-only --headless --slow-mo 0`。
+- 验证：连续运行两次 `--uncollect-only`，第二次日志必须显示“服务端现有 0 条”；再运行 `npm test`、`npm run check`。
 
 ### 收藏下载与取消收藏必须严格分阶段
 
@@ -71,12 +71,12 @@ npm run download -- https://www.huasheng.cn/video/158889664548866 --last-url "ht
 - 收藏模式成功下载后必须追加写入 `<out>/collection-ledger.json`，至少保留 `sourceKey`、收藏卡片特征、下载状态和取消收藏状态；每次取消结果也必须立即回写该台账。
 - 后续运行应从台账读取未取消项补清理，并跳过已下载 URL，避免“本地已下载但因 manifest 被覆盖而漏取消”或重复下载。
 
-### 收藏页虚拟列表下载流程
+### 收藏页直接分页接口下载流程
 
-- 收藏素材位于 `[class*="InfiniteList_scrollRef__"]` 的独立滚动容器，不能只滚动外层 `ClipChoiceList` 容器。
-- 正常流程固定为：单次从顶部滚动到底部并提取全部素材 → 统一下载 → 仅对本次扫描且下载成功的素材取消收藏 → 结束；禁止重新打开收藏页进行无限补漏。
-- 虚拟列表会改变卡片屏幕坐标，候选素材去重键不能包含坐标；使用去除签名参数的封面 URL 与卡片文本。
-- 验证：`node --test test/huasheng-download.test.js`、`npm run check`、`npm test`。
+- 收藏页是虚拟列表，DOM 滚动可能只得到首批约 24 条；收藏下载不得再依赖滚动或逐卡点击。
+- 捕获 `/api/innovideo/clip/video/favorite` 后设置 `ps=200`，按响应 `total` 和 `pn` 分页；`videos[].url` 直接用于下载，去除签名查询参数后的 URL 作为永久台账键。
+- 正常流程固定为：一次分页取得完整收藏快照 → 全部下载 → 仅对已下载成功项调用取消接口 → 服务端复查；禁止边下载边取消。
+- 验证：接口日志中的“提取数量/total”必须相等；运行 `node --test test/huasheng-download.test.js`、`npm run check`、`npm test`。
 
 ### 创建项目 A/B 方案 — 纯定时操作（不依赖 DOM 检测）
 

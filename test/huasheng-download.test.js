@@ -6,8 +6,13 @@ import path from 'node:path';
 import {
   assignCollectionMaterialNumbers,
   collectionCardSignature,
+  collectionApiPageCount,
+  collectionApiVideosToMaterials,
   collectionCleanupQueue,
   collectionCleanupScope,
+  favoriteMutationUrl,
+  favoriteUncollectPayload,
+  markCollectionLedgerUncollected,
   collectionMaterialsForPass,
   mergeCollectionLedgerItems,
   materialSourceKey,
@@ -22,7 +27,7 @@ import {
   shouldUncollectMaterial,
   shouldContinueCollectionLoop,
   shouldCleanupCollections,
-  shouldCountUncollectClick,
+  shouldCountEmptyMaterialScroll,
   successfulMaterialKeys,
   writeCollectionVideo,
   writeFileExclusive,
@@ -53,11 +58,6 @@ test('收藏清理只能在全部下载阶段结束后启动', () => {
     noUncollect: true,
     downloadPhaseComplete: true,
   }), false);
-});
-
-test('只有目标星标从 DOM 移除后才计为取消收藏成功', () => {
-  assert.equal(shouldCountUncollectClick({ iconStillConnected: false }), true);
-  assert.equal(shouldCountUncollectClick({ iconStillConnected: true }), false);
 });
 
 test('pad2 formats scene and material numbers', () => {
@@ -188,6 +188,91 @@ test('优先选择实际可滚动的 InfiniteList 容器', () => {
   assert.equal(selectScrollableTarget([
     { id: '首屏', scrollHeight: 480, clientHeight: 480 },
   ]), '首屏');
+});
+
+test('虚拟收藏列表未到真实底部时，假空滚动不能结束完整扫描', () => {
+  assert.equal(shouldCountEmptyMaterialScroll({
+    newVideosThisPass: 0,
+    before: 995,
+    after: 995,
+    max: 1742,
+  }), false);
+  assert.equal(shouldCountEmptyMaterialScroll({
+    newVideosThisPass: 0,
+    before: 1742,
+    after: 1742,
+    max: 1742,
+  }), true);
+  assert.equal(shouldCountEmptyMaterialScroll({
+    newVideosThisPass: 1,
+    before: 1742,
+    after: 1742,
+    max: 1742,
+  }), false);
+});
+
+test('收藏接口按 200 条分页，并直接产出可下载素材', () => {
+  assert.equal(collectionApiPageCount(203, 200), 2);
+  assert.equal(collectionApiPageCount(0, 200), 0);
+  assert.deepEqual(
+    collectionApiVideosToMaterials([
+      {
+        id: 'video-id',
+        cover: 'https://cdn.example.com/cover.jpg?token=abc',
+        url: 'https://cdn.example.com/video.mp4?signature=abc',
+      },
+    ]).map((item) => ({
+      key: item.key,
+      url: item.url,
+      collectionCard: item.collectionCard,
+    })),
+    [{
+      key: 'https://cdn.example.com/video.mp4',
+      url: 'https://cdn.example.com/video.mp4?signature=abc',
+      collectionCard: { coverKey: 'https://cdn.example.com/cover.jpg', cardText: '' },
+    }]
+  );
+});
+
+test('取消收藏接口沿用收藏列表签名参数，但不携带分页和项目参数', () => {
+  const mutationUrl = new URL(favoriteMutationUrl(
+    'https://www.huasheng.cn/api/innovideo/clip/video/favorite?clip_id=42&ps=200&pn=2&_ra=abc&_bs=def&_fv=ghi',
+    'csrf-token'
+  ));
+
+  assert.equal(mutationUrl.pathname, '/api/innovideo/clip/video/fav');
+  assert.equal(mutationUrl.searchParams.get('_ra'), 'abc');
+  assert.equal(mutationUrl.searchParams.get('_bs'), 'def');
+  assert.equal(mutationUrl.searchParams.get('_fv'), 'ghi');
+  assert.equal(mutationUrl.searchParams.get('csrf'), 'csrf-token');
+  assert.equal(mutationUrl.searchParams.has('clip_id'), false);
+  assert.equal(mutationUrl.searchParams.has('ps'), false);
+  assert.equal(mutationUrl.searchParams.has('pn'), false);
+});
+
+test('取消收藏请求使用视频 ID，并明确设置 fav=0', () => {
+  assert.deepEqual(favoriteUncollectPayload('video-uuid'), {
+    clip_uuid: 'video-uuid',
+    fav: 0,
+    is_revoke: false,
+  });
+});
+
+test('服务端收藏列表清空后，永久台账全部标记为已取消', () => {
+  const ledger = {
+    items: [
+      { sourceKey: 'a', status: 'downloaded', uncollectStatus: 'failed', uncollectError: '旧错误' },
+      { sourceKey: 'b', status: 'downloaded', uncollectStatus: 'skipped' },
+      { sourceKey: 'c', status: 'failed', uncollectStatus: 'skipped' },
+    ],
+  };
+
+  assert.equal(markCollectionLedgerUncollected(ledger), 2);
+  assert.deepEqual(ledger.items, [
+    { sourceKey: 'a', status: 'downloaded', uncollectStatus: 'uncollected' },
+    { sourceKey: 'b', status: 'downloaded', uncollectStatus: 'uncollected' },
+    { sourceKey: 'c', status: 'failed', uncollectStatus: 'skipped' },
+  ]);
 });
 
 test('nextCollectionMaterialNumber continues after the largest existing collection file', () => {
