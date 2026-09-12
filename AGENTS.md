@@ -91,3 +91,11 @@ npm run download -- https://www.huasheng.cn/video/158889664548866 --last-url "ht
 - 易踩坑：不要试图检测 AI 回复内容；不要在首页提交后、项目页跳转前输入 A/B 指令；进入项目页后失败只能保留项目 URL 并提示下一步，不能重新创建项目。
 - 项目页输入框当前占位符是 `输入自定义回答`；旧的 `输入你的任何想法` 只适用于部分页面，项目页继续输入 A/B 和确认时必须兼容两者。
 - 验证：`npm test`、`npm run check`。
+
+### 时间轴分镜下载
+
+- 使用 `npm run download -- "<项目URL>" --storyboard --out "<目标目录>"`，顺序保存 `分镜01.mp4` 至最后一镜，保留源格式。
+- 时间轴横向懒加载，必须滚动到底并与页面“分镜总数”校验；使用 `.clip-card-box` 内编号，不写死动态 `:r17:`。
+- 卡片 `img[alt]` 是 clip ID，必须匹配 `video[data-loaded-clip-id]`，避免误取预加载的相邻视频。
+- 收藏、推荐和分镜模式独立；分镜模式不清收藏。通过 `storyboard-manifest.json` 校验已有文件来源和大小，不覆盖冲突文件。
+- 验证：`npm run check`、`npm test`；实跑后检查编号连续、失败清单为空、ffprobe 可读取全部视频。

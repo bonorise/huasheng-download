@@ -134,3 +134,11 @@ npm --prefix /Users/liubo/Desktop/PROJECT/00tools/huasheng-download run download
 ```
 
 检查但不修改收藏状态时加 `--dry-run`；下载但不取消收藏时加 `--no-uncollect`。
+
+## 下载时间轴当前分镜视频
+
+```bash
+npm run download -- "<华声项目URL>" --storyboard --out "<项目目录>/storyboard"
+```
+
+扫描完整时间轴并校验“分镜总数”，从分镜01到末尾逐个下载当前使用的视频，命名为 `分镜01.mp4` 等，保留源格式。通过卡片 clip ID 匹配播放器，避免相邻预加载视频串镜。与收藏和推荐模式互斥；不取消收藏、不自动切割。失败后可重跑同一命令，来源及大小与 `storyboard-manifest.json` 一致的已有文件会跳过；冲突文件不会覆盖。失败见 `storyboard-failures.json`。

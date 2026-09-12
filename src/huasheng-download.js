@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import fs from 'node:fs/promises';
+import { downloadStoryboards } from './storyboard-download.js';
 import path from 'node:path';
 import {
   DEFAULT_OUT_DIR,
@@ -30,7 +31,7 @@ const MODAL_CLOSE_SELECTOR = 'button[aria-label="关闭"]';
 const COLLECT_ICON_SELECTOR = '[class*="ClipChoiceItem_collectIconWrap__"]';
 const SUPPORTED_TABS = new Set(['收藏', '推荐']);
 
-function parseArgs(argv) {
+export function parseArgs(argv) {
   const args = {
     url: '',
     outDir: DEFAULT_OUT_DIR,
@@ -52,7 +53,8 @@ function parseArgs(argv) {
       args.url = arg;
       continue;
     }
-    if (arg === '--headless') args.headless = true;
+    if (arg === '--storyboard') args.storyboard = true;
+    else if (arg === '--headless') args.headless = true;
     else if (arg === '--dry-run') args.dryRun = true;
     else if (arg === '--uncollect-only') args.uncollectOnly = true;
     else if (arg === '--no-uncollect') args.noUncollect = true;
@@ -71,6 +73,10 @@ function parseArgs(argv) {
     }
   }
 
+  if (args.storyboard) {
+    if (!args.url || !/^https:\/\/www\.huasheng\.cn\/video\/\d+(?:[?#].*)?$/.test(args.url)) throw new Error('--storyboard 必须提供华声项目 URL');
+    if (args.uncollectOnly || args.noUncollect || args.count || args.lastUrl || args.limitPerScene || argv.includes('--tab')) throw new Error('--storyboard 不可与收藏、推荐、数量限制参数混用');
+  }
   if (!args.url) {
     args.url = 'https://www.huasheng.cn/video/158889664548866';
   }
@@ -97,6 +103,7 @@ function printHelp() {
   npm run download -- https://www.huasheng.cn/video/158889664548866 --last-url "https://www.huasheng.cn/video/158889664548866?clip=42"
 
 选项:
+  --storyboard        按时间轴顺序下载当前分镜视频，命名为分镜01.mp4等
   --out <目录>        输出目录，默认 ${DEFAULT_OUT_DIR}
   --profile <目录>    Playwright 登录态目录，默认 ${DEFAULT_PROFILE_DIR}
   --count <数量>      分镜总数，自动发现失败时可用
@@ -1422,7 +1429,7 @@ async function processMaterials({ materials, context, args, manifest, ledger, fa
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   const args = parseArgs(process.argv.slice(2));
-  downloadCollections(args).catch((error) => {
+  (args.storyboard ? downloadStoryboards(args) : downloadCollections(args)).catch((error) => {
     console.error(`\n错误: ${error.message}`);
     process.exitCode = 1;
   });
