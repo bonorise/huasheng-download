@@ -36,17 +36,15 @@ npm run download -- https://www.huasheng.cn/video/158889664548866 --last-url "ht
 
 ## 项目经验
 
-### MG 动画 blob webm 下载
+### MG 动画素材窗口 WebM 直链下载
 
-- 现象：华声改版后 MG 动画 `video` 不再暴露 `data-mov-src` / http mp4，而是 `<video src="blob:https://www.huasheng.cn/...">`，原脚本按 mp4 URL 下载会失效。
-- 根因：blob URL 只在浏览器页面上下文有效，Node 侧 `context.request.get(blob:...)` 不能直接下载；需要在 Playwright 页面内 `fetch(blobUrl)` 读取 `ArrayBuffer`。
-- 解决：保持 `src/mg-download.js` 的横向分镜卡片扫描、hover 封面、点击“MG动画 N”按钮流程；点击后枚举播放器内 blob video，只接受 MIME 为 `video/webm` 或文件头 `1a 45 df a3` 的 WebM blob，在页面上下文分块 base64 传回 Node，写为 `MG动画_XX.webm`。
-- 易踩坑：页面可能同时挂载分镜 mp4 blob 与 MG webm blob，必须用 `blob.type === "video/webm"` 或 WebM 魔数过滤；大文件转 base64 要分块；不要误改成分镜素材 mp4 下载流程。
+- 现象：选中时间轴分镜后，素材窗口的 `MG动画NN` 区块已直接暴露 HTTPS `video[src=".../output.webm"]`；旧的 hover、点击 MG 按钮、等待 blob 和页面内 base64 传输既慢又不稳定。
+- 解决：`src/mg-download.js` 直接收集时间轴上全部 `MG动画NN` 条带，逐个点击条带；从打开的对应素材窗口读取 HTTP(S) `.webm`，保存为 `MG动画_NN.webm`。不再保留 blob 回退流程。
+- 易踩坑：MG 条带可能跨越两个或更多视频片段，禁止以分镜卡片为遍历单位，否则会漏项；编号以时间轴条带为准，不能按发现顺序猜测。只接受 HTTP(S) `.webm`，写入前校验 WebM 魔数 `1a 45 df a3`。
 - 验证：`npm run check`、`npm test`、`npm run mg-download -- https://www.huasheng.cn/video/167569113927795 --limit 1 --headless`，输出文件用 `file <path>` 应显示 `WebM`。
 
-### MG 下载顺序和 headless 限制
+### MG 下载顺序
 
-- headless 模式下全部 MG blob 可能 `Failed to fetch`，疑似 blob 生命周期/渲染时序差异；如果 headless 全部失败，改用可见浏览器模式，不加 `--headless`，可加 `--slow-mo 80`。
 - 剪辑素材项目中应先下载全部视频素材，确认完毕后再下载 MG 动画；不要两个流程同时跑或先跑 MG。
 
 ### 收藏页取消收藏必须走接口，禁止点击星标

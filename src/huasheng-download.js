@@ -23,6 +23,7 @@ const DEFAULT_STOP_AFTER_EMPTY_SCROLLS = 3;
 const MAX_COLLECTION_DOWNLOAD_ATTEMPTS = 2;
 const COLLECTION_LEDGER_FILE = 'collection-ledger.json';
 const COLLECTION_API_PAGE_SIZE = 200;
+const COLLECTION_FAVORITE_API_FALLBACK = 'https://www.huasheng.cn/api/innovideo/clip/video/favorite';
 const COLLECTION_UNCOLLECT_CONCURRENCY = 6;
 const COLLECTION_UNCOLLECT_MAX_ATTEMPTS = 3;
 const COLLECTION_UNCOLLECT_MAX_PASSES = 3;
@@ -714,12 +715,19 @@ async function captureCollectionFavoriteListUrl(page, args) {
       await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
     }
 
-    const expanded = await openMaterialPanel(page);
-    if (!expanded) {
-      console.warn('[收藏] 没有点到“展开更多”，将尝试直接扫描当前可见素材。');
+    // 收藏模式最终走接口直取，页面交互只用于触发 favorite 请求。
+    // 华声改版后素材面板入口可能消失，使点击落到整页容器并抛异常，
+    // 因此这里必须容错降级，不能让 UI 侦察失败中断下载流程。
+    try {
+      const expanded = await openMaterialPanel(page);
+      if (!expanded) {
+        console.warn('[收藏] 没有点到“展开更多”，将尝试直接扫描当前可见素材。');
+      }
+      await selectMaterialTab(page, '收藏');
+      await materialContainer(page);
+    } catch (uiError) {
+      console.warn(`[收藏] 页面交互未完成（${String(uiError.message).split('\n')[0]}），改用接口直取。`);
     }
-    await selectMaterialTab(page, '收藏');
-    await materialContainer(page);
 
     const deadline = Date.now() + 10000;
     while (!favoriteListUrl && Date.now() < deadline) {
@@ -739,7 +747,8 @@ async function captureCollectionFavoriteListUrl(page, args) {
   }
 
   if (!favoriteListUrl) {
-    throw new Error('未捕获收藏列表接口，无法执行无点击批量提取');
+    console.warn(`[收藏] 页面未产生收藏接口请求，直接使用接口地址直取: ${COLLECTION_FAVORITE_API_FALLBACK}`);
+    favoriteListUrl = COLLECTION_FAVORITE_API_FALLBACK;
   }
   return favoriteListUrl;
 }

@@ -14,6 +14,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 npm test                    # node:test 运行所有测试
 npm run check               # 语法检查（node --check）
+npm run create -- <txt> --mode A|B   # 创建华声视频项目（失败自动取证到 debug/）
+npm run resume -- <URL> --mode A|B --start 1|2|3  # create 失败后在已有项目页续传，勿重跑 create
 npm run download -- <URL>   # 下载收藏/推荐视频素材 (mp4)
 npm run mg-download -- <URL> # 下载 MG 动画 (webm)
 ```
@@ -24,46 +26,45 @@ npm run mg-download -- <URL> # 下载 MG 动画 (webm)
 
 ### `src/huasheng-download.js` — 分镜视频素材下载
 
-按分镜访问华声项目页，在"收藏"或"推荐"tab 中提取素材播放弹窗里的 mp4 URL。
+推荐模式按分镜访问华声项目页并从播放弹窗提取 mp4；收藏模式直接读取华声分页接口，不滚动虚拟列表、不点击素材卡片。
 
 收藏模式流程：
 
 ```text
-单次从顶部滚动到底部并提取全部 → 统一下载 → 仅取消本次扫描且下载成功项 → 结束
+分页接口一次性提取全部 → 统一下载 → 接口取消已下载成功项 → 服务端复查
 ```
 
-禁止为“补漏”重新打开收藏页并循环扫描；虚拟列表会重排卡片，这会导致无限滚动。真实滚动节点是 `InfiniteList_scrollRef__*`，候选去重不得使用屏幕坐标。
+收藏列表通过 `/api/innovideo/clip/video/favorite` 设置 `ps=200` 并按 `total` 分页。取消收藏通过 `/api/innovideo/clip/video/fav`，不得以卡片 DOM 消失或星标数量判断成功；全量清空必须复查 `total=0`。
 
 核心流程：
-1. `discoverScenes()` — 从页面 `<a href>` 和文本中推断分镜总数
-1. 逐分镜 `openMaterialPanel()` → `selectMaterialTab()` → 滚动 `materialContainer()` → 提取 `visibleVideoSources()`
-1. 下载后写 `manifest.json` 和 `failures.json`
+1. 推荐模式：`discoverScenes()` 推断分镜，逐分镜打开素材弹窗提取视频
+1. 收藏模式：捕获 favorite 列表 URL，直接分页生成完整下载队列
+1. 全部下载结束后有限并发调用 fav 接口，失败重试并复查服务端剩余数
+1. 写 `manifest.json`、`failures.json` 和跨运行 `collection-ledger.json`
 
 关键约束：
 - `wx` flag 排他写入，**永不覆盖**已有文件
 - 收藏模式 `--limit` 是整次运行总量；推荐模式是每个分镜数量
 - `materialUrlKey()` 签名参数去重，通过 `seenKeys` Set 避免重复下载
 - 收藏文件从输出目录现有最大编号加一开始
-- 只有下载成功的素材才能取消收藏
+- 只有下载成功的素材才能取消收藏；`--uncollect-only` 仅用于确认素材已下载后的补清理
 
 ### `src/mg-download.js` — MG 动画下载
 
-打开项目视频页，在底部分镜卡片横滚区域收集卡片，hover 触发 MG 按钮，通过 blob 差分检测提取 MG 动画视频数据。
+打开项目视频页，直接收集时间轴上的全部 MG 条带，逐个点击条带并读取对应素材窗口中的 WebM 视频链接。
 
 核心流程：
-1. `collectClipCards()` — 横向滚动画廊收集 `video-clip-*` 卡片
-1. 逐卡片 hover → 找到 MG 按钮（`span.font-normal.text-[12px].whitespace-nowrap`）
-1. `captureMGBlob()` — 点击前记录 `currentBlobVideoUrls()`，点击后双层检测新 blob：
-   - `waitForWebmBlobVideo()` — 按面积排序可见 video，检查 `blob.type === 'video/webm'` 或文件头 `1a 45 df a3`（WebM magic bytes）
-   - `waitForBlobVideoUrl()` — 短超时（1s）回退：任何新 blob 都接受，然后报"不是 webm"供调试
-1. `readBlobVideo()` — 页面内 fetch blob，0x8000 分块转 base64
-1. `seenBlobUrls` Set 去重，写 `manifest.json` 和 `failures.json`
+1. 从时间轴条带标题收集完整的 `MG动画NN` 编号（包括跨多个视频片段的条带）
+1. 逐个点击 MG 条带，等待对应素材窗口更新
+1. 查找与当前编号一致的 HTTP(S) `video[src$=".webm"]`
+1. 按标题编号去重，直接请求 WebM URL，校验文件头并写 `manifest.json` 和 `failures.json`
 
 关键细节：
-- **点击前/后 blob URL 差分**是核心创新：记录点击前的所有 blob URL，只提取点击后新出现的，避免误抓分镜预览 mp4
-- 双层检测确保优先捕获 WebM MG 动画；回退层提供可调试的错误信息
+- 编号只取素材窗口 `MG动画NN` 标题，不按 DOM 发现顺序猜测
+- 禁止按分镜卡片遍历；跨片段 MG 不属于任意单一卡片，会被漏掉
+- 只接受 HTTPS/HTTP `.webm` 直链，写入前校验 WebM magic bytes
+- 直链来自页面 DOM，下载前必须经 `assertSafeDownloadUrl()` 校验：仅放行 http(s)，且主机名与其**全部 DNS 解析结果**都不得落在内网/环回/链路本地/CGNAT；请求同时设 `maxRedirects: 0`，避免 302 把带登录态的请求带进内网
 - 输出格式 `MG动画_01.webm`，`--limit` 控制最多下载数量
-- headless 模式可能导致 blob fetch 全部失败，改用可见浏览器模式
 
 ### 共享模式
 
@@ -76,7 +77,7 @@ npm run mg-download -- <URL> # 下载 MG 动画 (webm)
 ## 测试
 
 `node:test` 内置框架，纯函数单元测试：
-- `test/huasheng-download.test.js` — `pad2`, `sceneUrl`, `sceneNumberFromUrl`, `materialUrlKey`
+- `test/huasheng-download.test.js` — URL、接口分页、取消请求、永久台账和排他写入
 - `test/mg-download.test.js` — `pad2`, `mgFilename`
 
 无浏览器集成测试。
@@ -88,7 +89,7 @@ npm run mg-download -- <URL> # 下载 MG 动画 (webm)
 ## 关键约束
 
 - 任何情况下不能覆盖已有视频（`wx` flag）
-- 只有下载成功的素材才能取消收藏（huasheng-download）
+- 只有下载成功的素材才能取消收藏；清空结果必须以服务端接口复查为准
 - 真实下载会修改远端收藏状态，必须在用户明确要求后执行
 - 启动下载后持续观察直到进程结束
 

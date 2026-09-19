@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { chromium } from 'playwright';
+import dns from 'node:dns/promises';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
@@ -9,11 +10,6 @@ import { stdin as input, stdout as output } from 'node:process';
 
 const DEFAULT_OUT_DIR = path.join(os.homedir(), 'Desktop', 'hs-src');
 const DEFAULT_PROFILE_DIR = path.resolve('.browser-profile');
-const SCROLL_AREA_SELECTOR = '.flex.items-end.flex-1.gap-3';
-const CLIP_CARD_SELECTOR = '[class*="video-clip-"]';
-const COVER_IMG_SELECTOR = '.clip-card-box img';
-const MG_BUTTON_SELECTOR = 'span.font-normal.text-\\[12px\\].whitespace-nowrap';
-const DEFAULT_STOP_AFTER_EMPTY_SCROLLS = 3;
 
 function parseArgs(argv) {
   const args = {
@@ -74,9 +70,9 @@ function printHelp() {
   --out <目录>        输出目录，默认 ${DEFAULT_OUT_DIR}
   --profile <目录>    Playwright 登录态目录，默认 ${DEFAULT_PROFILE_DIR}
   --limit <数量>      最多下载多少个 MG 动画
-  --start-card <编号>  从指定分镜卡片编号开始处理，跳过之前的卡片
+  --start-card <编号>  从指定 MG 编号开始处理
   --headless          无头模式。首次登录不建议使用
-  --dry-run           只提取 blob URL，不下载
+  --dry-run           只提取 WebM 直链，不下载
   --slow-mo <毫秒>    浏览器操作延迟，默认 80
 `);
 }
@@ -94,14 +90,200 @@ function shortUrl(url) {
   }
 }
 
-function mgAnimationNumber(text) {
-  const match = /MG动画\s*(\d+)/i.exec(text);
+export function mgAnimationNumber(text) {
+  const match = /^\s*MG\s*动画\s*(\d+)\s*$/i.exec(String(text || ''));
   return match ? Number(match[1]) : 0;
+}
+
+export function isDirectWebmUrl(rawUrl) {
+  try {
+    const url = new URL(String(rawUrl || ''));
+    if (!/^https?:$/.test(url.protocol)) return false;
+    if (!/\.webm$/i.test(url.pathname)) return false;
+    // 地址来自页面 DOM，指向内网字面量的候选必须在提取阶段就丢弃
+    return !isPrivateAddress(url.hostname);
+  } catch {
+    return false;
+  }
 }
 
 export function mgFilename(mgNumber, mimeType = '') {
   const ext = /^video\/webm\b/i.test(mimeType) ? 'webm' : 'mp4';
   return `MG动画_${pad2(mgNumber)}.${ext}`;
+}
+
+const PRIVATE_IPV4_PATTERNS = [
+  /^0\./, // 0.0.0.0/8 未指定
+  /^10\./, // 10.0.0.0/8 私有
+  /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./, // 100.64.0.0/10 CGNAT
+  /^127\./, // 环回
+  /^169\.254\./, // 链路本地（含 169.254.169.254 云元数据）
+  /^172\.(1[6-9]|2\d|3[01])\./, // 172.16.0.0/12 私有
+  /^192\.168\./, // 192.168.0.0/16 私有
+];
+
+// 判定单个 IP 字面量是否指向本机/内网。下载目标来自页面 DOM，
+// 必须校验，否则页面上的任意 URL 都会让脚本替其发出带登录态的请求。
+export function isPrivateAddress(address) {
+  const value = String(address || '').trim().toLowerCase().replace(/^\[|\]$/g, '');
+  if (!value) return true;
+
+  // IPv4-mapped/compatible IPv6（::ffff:127.0.0.1）取内嵌 v4 重新判定
+  const ipv4Tail = /(\d+\.\d+\.\d+\.\d+)$/.exec(value);
+  if (ipv4Tail && value.includes(':')) return isPrivateAddress(ipv4Tail[1]);
+
+  if (/^\d+\.\d+\.\d+\.\d+$/.test(value)) {
+    return PRIVATE_IPV4_PATTERNS.some((pattern) => pattern.test(value));
+  }
+
+  if (value.includes(':')) {
+    if (value === '::' || value === '::1') return true;
+    const head = value.split(':')[0];
+    if (/^f[cd][0-9a-f]{0,2}$/.test(head)) return true; // fc00::/7 唯一本地
+    if (/^fe[89ab][0-9a-f]?$/.test(head)) return true; // fe80::/10 链路本地
+    if (/^ff[0-9a-f]{0,2}$/.test(head)) return true; // ff00::/8 组播
+    return false;
+  }
+
+  return false;
+}
+
+// 校验下载目标：仅允许 http(s)，且主机名及其全部 DNS 解析结果都不得落在内网。
+// maxRedirects 由调用方设为 0，避免 302 跳到内网绕过本校验。
+export async function assertSafeDownloadUrl(rawUrl, { resolveHost } = {}) {
+  let url;
+  try {
+    url = new URL(String(rawUrl || ''));
+  } catch {
+    throw new Error('下载地址不是合法 URL');
+  }
+  if (!/^https?:$/.test(url.protocol)) {
+    throw new Error(`下载地址协议不受支持: ${url.protocol}`);
+  }
+
+  const host = url.hostname.replace(/^\[|\]$/g, '');
+  if (!host) throw new Error('下载地址缺少主机名');
+  if (isPrivateAddress(host)) {
+    throw new Error(`下载地址指向内网，已拒绝: ${host}`);
+  }
+
+  const lookup = resolveHost || ((name) => dns.lookup(name, { all: true }));
+  let records;
+  try {
+    records = await lookup(host);
+  } catch (error) {
+    throw new Error(`下载地址主机名无法解析: ${host} (${error.message})`);
+  }
+  for (const record of Array.isArray(records) ? records : [records]) {
+    if (isPrivateAddress(record?.address)) {
+      throw new Error(`下载地址解析到内网地址，已拒绝: ${host} -> ${record.address}`);
+    }
+  }
+
+  return url.toString();
+}
+
+export function directMGMaterials(entries) {
+  const seenNumbers = new Set();
+  const seenUrls = new Set();
+  const materials = [];
+  for (const entry of entries || []) {
+    const mgNumber = mgAnimationNumber(entry?.label);
+    const url = String(entry?.url || '');
+    if (!mgNumber || !isDirectWebmUrl(url) || seenNumbers.has(mgNumber) || seenUrls.has(url)) continue;
+    seenNumbers.add(mgNumber);
+    seenUrls.add(url);
+    materials.push({
+      mgNumber,
+      filename: mgFilename(mgNumber, 'video/webm'),
+      url,
+      mimeType: 'video/webm',
+      sourceType: 'direct',
+    });
+  }
+  return materials.sort((a, b) => a.mgNumber - b.mgNumber);
+}
+
+export function timelineMGNumbers(labels) {
+  return Array.from(new Set((labels || []).map(mgAnimationNumber).filter(Boolean))).sort((a, b) => a - b);
+}
+
+async function readDirectMGMaterials(page) {
+  const entries = await page.evaluate(() => {
+    const result = [];
+    for (const video of document.querySelectorAll('video[src]')) {
+      // 素材窗源码中的 src 才是可持久下载地址；currentSrc 可能被播放器改成临时 blob。
+      const url = video.getAttribute('src') || video.src || video.currentSrc || '';
+      if (!/^https?:\/\//i.test(url) || !/\.webm(?:[?#]|$)/i.test(url)) continue;
+
+      let container = video.parentElement;
+      let label = '';
+      for (let depth = 0; container && depth < 12; depth += 1, container = container.parentElement) {
+        const labelNode = Array.from(container.querySelectorAll('div')).find((node) => (
+          /^\s*MG\s*动画\s*\d+\s*$/i.test(node.textContent || '')
+        ));
+        if (labelNode) {
+          label = labelNode.textContent || '';
+          break;
+        }
+      }
+      if (label) result.push({ label, url });
+    }
+    return result;
+  });
+  return directMGMaterials(entries);
+}
+
+async function mgFileExists(outDir, mgNumber) {
+  for (const mimeType of ['video/webm', 'video/mp4']) {
+    try {
+      await fs.access(path.join(outDir, mgFilename(mgNumber, mimeType)));
+      return true;
+    } catch { /* 不存在 */ }
+  }
+  return false;
+}
+
+async function collectTimelineMGNumbers(page) {
+  const labels = await page.evaluate(() => Array.from(document.querySelectorAll('span'))
+    .filter((span) => {
+      if (!/^\s*MG\s*动画\s*\d+\s*$/i.test(span.textContent || '')) return false;
+      let element = span.parentElement;
+      for (let depth = 0; element && depth < 5; depth += 1, element = element.parentElement) {
+        if (element.classList.contains('absolute') && element.classList.contains('cursor-pointer')) return true;
+      }
+      return false;
+    })
+    .map((span) => span.textContent || ''));
+  return timelineMGNumbers(labels);
+}
+
+async function selectTimelineMG(page, mgNumber) {
+  return page.evaluate((targetNumber) => {
+    for (const span of document.querySelectorAll('span')) {
+      const match = /^\s*MG\s*动画\s*(\d+)\s*$/i.exec(span.textContent || '');
+      if (Number(match?.[1]) !== targetNumber) continue;
+      let element = span.parentElement;
+      for (let depth = 0; element && depth < 5; depth += 1, element = element.parentElement) {
+        if (element.classList.contains('absolute') && element.classList.contains('cursor-pointer')) {
+          element.scrollIntoView({ block: 'nearest', inline: 'center' });
+          element.click();
+          return true;
+        }
+      }
+    }
+    return false;
+  }, mgNumber);
+}
+
+async function waitForDirectMGMaterial(page, mgNumber, timeout = 8000) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    const item = (await readDirectMGMaterials(page)).find((material) => material.mgNumber === mgNumber);
+    if (item) return item;
+    await page.waitForTimeout(250);
+  }
+  return null;
 }
 
 async function pauseForEnter(message) {
@@ -138,325 +320,40 @@ async function launchBrowser(args) {
   return { context, page };
 }
 
-async function collectClipCards(page) {
-  const scrollArea = page.locator(SCROLL_AREA_SELECTOR).first();
-  await scrollArea.waitFor({ state: 'visible', timeout: 10000 }).catch(() => {});
-  await page.waitForTimeout(500);
-
-  const seenClipIds = new Set();
-  const cards = [];
-  let emptyScrolls = 0;
-
-  while (emptyScrolls < DEFAULT_STOP_AFTER_EMPTY_SCROLLS) {
-    const newCards = await page.evaluate(({ cardSelector, seen }) => {
-      const seenSet = new Set(seen);
-      const elements = Array.from(document.querySelectorAll(cardSelector));
-      const result = [];
-      for (const el of elements) {
-        const match = String(el.className).match(/video-clip-(\d+)/);
-        const clipId = match ? match[1] : '';
-        if (!clipId || seenSet.has(clipId)) continue;
-        seenSet.add(clipId);
-        const rect = el.getBoundingClientRect();
-        result.push({ clipId, x: Math.round(rect.left), y: Math.round(rect.top) });
-      }
-      return result;
-    }, { cardSelector: CLIP_CARD_SELECTOR, seen: Array.from(seenClipIds) });
-
-    for (const card of newCards) {
-      seenClipIds.add(card.clipId);
-      cards.push(card);
-    }
-
-    emptyScrolls = newCards.length === 0 ? emptyScrolls + 1 : 0;
-
-    await page.evaluate((selector) => {
-      const container = document.querySelector(selector);
-      if (container) container.scrollBy({ left: 400, behavior: 'instant' });
-    }, SCROLL_AREA_SELECTOR);
-    await page.waitForTimeout(600);
-  }
-
-  cards.sort((a, b) => Number(a.clipId) - Number(b.clipId));
-  return cards;
-}
-
-async function waitForWebmBlobVideo(page, seenBlobUrls, timeout = 10000) {
-  const deadline = Date.now() + timeout;
-  while (Date.now() < deadline) {
-    const candidates = await page.evaluate(async (seen) => {
-      const seenSet = new Set(seen);
-      const videos = Array.from(document.querySelectorAll('video'));
-      const items = [];
-
-      function visibleScore(video, rect) {
-        let score = 0;
-        let el = video;
-        while (el && el !== document.body) {
-          const style = window.getComputedStyle(el);
-          if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) return -1;
-          if (Number(style.opacity) >= 0.5) score += 1;
-          el = el.parentElement;
-        }
-        if (rect.width > 80 && rect.height > 80 && rect.bottom > 0 && rect.right > 0) score += 10;
-        if (rect.width >= 320 && rect.height >= 180) score += 5;
-        return score;
-      }
-
-      for (const video of videos) {
-        const src = video.currentSrc || video.src || '';
-        if (!src.startsWith('blob:') || seenSet.has(src)) continue;
-
-        const rect = video.getBoundingClientRect();
-        const score = visibleScore(video, rect);
-        if (score < 0) continue;
-
-        let mimeType = '';
-        let size = 0;
-        let header = '';
-        try {
-          // 使用 XHR 替代 fetch，绕过页面 JS 对 fetch 的拦截
-          const xhrBlob = await new Promise((res, rej) => {
-            const xhr = new XMLHttpRequest();
-            xhr.open('GET', src);
-            xhr.responseType = 'blob';
-            xhr.onload = () => {
-              if (xhr.status === 200 || xhr.status === 0) res(xhr.response);
-              else rej(new Error(`XHR failed: ${xhr.status}`));
-            };
-            xhr.onerror = () => rej(new Error('XHR network error'));
-            xhr.send();
-          });
-          const blob = xhrBlob;
-          const bytes = new Uint8Array(await blob.slice(0, 16).arrayBuffer());
-          mimeType = blob.type || '';
-          size = blob.size;
-          header = Array.from(bytes).map((byte) => byte.toString(16).padStart(2, '0')).join(' ');
-        } catch (error) {
-          // XHR 读不了的 blob（已 revoke 或未就绪）不能作为候选返回，
-          // 否则下游 readBlobVideo 会对同一 URL 再次失败；继续轮询等可读的 webm
-          continue;
-        }
-
-        const isWebm = /^video\/webm\b/i.test(mimeType) || header.startsWith('1a 45 df a3');
-        if (!isWebm) continue;
-
-        items.push({
-          src,
-          mimeType,
-          size,
-          header,
-          score,
-          area: rect.width * rect.height,
-          rect: {
-            x: Math.round(rect.left),
-            y: Math.round(rect.top),
-            width: Math.round(rect.width),
-            height: Math.round(rect.height),
-          },
-        });
-      }
-
-      return items.sort((a, b) => (b.score - a.score) || (b.area - a.area));
-    }, Array.from(seenBlobUrls));
-
-    if (candidates.length) return candidates[0];
-    await page.waitForTimeout(250);
-  }
-  return null;
-}
-
-async function currentBlobVideoUrls(page) {
-  return page.evaluate(() => {
-    return Array.from(document.querySelectorAll('video'))
-      .map((video) => video.currentSrc || video.src || '')
-      .filter((src) => src.startsWith('blob:'));
-  });
-}
-
-async function waitForBlobVideoUrl(page, previousBlobUrls, timeout = 10000) {
-  const deadline = Date.now() + timeout;
-  while (Date.now() < deadline) {
-    const blobUrl = await page.evaluate((seen) => {
-      const seenSet = new Set(seen);
-      const videos = Array.from(document.querySelectorAll('video'));
-      const candidates = videos
-        .map((video) => {
-          const src = video.currentSrc || video.src || '';
-          const rect = video.getBoundingClientRect();
-          const style = window.getComputedStyle(video);
-          return {
-            src,
-            area: rect.width * rect.height,
-            visible: rect.width > 80 &&
-              rect.height > 80 &&
-              rect.bottom > 0 &&
-              rect.right > 0 &&
-              style.display !== 'none' &&
-              style.visibility !== 'hidden' &&
-              Number(style.opacity) !== 0,
-          };
-        })
-        .filter((item) => item.visible && item.src.startsWith('blob:') && !seenSet.has(item.src))
-        .sort((a, b) => b.area - a.area);
-      return candidates[0]?.src || '';
-    }, Array.from(previousBlobUrls));
-
-    if (blobUrl) return blobUrl;
-    await page.waitForTimeout(250);
-  }
-  return '';
-}
-
-async function readBlobVideo(page, blobUrl) {
-  const result = await page.evaluate(async (url) => {
-    // 使用 XHR 替代 fetch，绕过页面 JS 对 fetch 的拦截
-    const xhrBlob = await new Promise((resolve, reject) => {
-      const xhr = new XMLHttpRequest();
-      xhr.open('GET', url);
-      xhr.responseType = 'blob';
-      xhr.onload = () => {
-        if (xhr.status === 200 || xhr.status === 0) {
-          resolve({ blob: xhr.response, contentType: xhr.getResponseHeader('Content-Type') || '' });
-        } else {
-          reject(new Error(`XHR blob failed: ${xhr.status}`));
-        }
-      };
-      xhr.onerror = () => reject(new Error('XHR network error'));
-      xhr.send();
-    });
-
-    const blob = xhrBlob.blob;
-    const bytes = new Uint8Array(await blob.arrayBuffer());
-    const chunkSize = 0x8000;
-    const chunks = [];
-    for (let offset = 0; offset < bytes.length; offset += chunkSize) {
-      const chunk = bytes.subarray(offset, offset + chunkSize);
-      let binary = '';
-      for (let i = 0; i < chunk.length; i += 1) {
-        binary += String.fromCharCode(chunk[i]);
-      }
-      chunks.push(btoa(binary));
-    }
-
-    return {
-      mimeType: blob.type || xhrBlob.contentType || 'video/webm',
-      size: bytes.byteLength,
-      chunks,
-    };
-  }, blobUrl);
-
-  return {
-    body: Buffer.concat(result.chunks.map((chunk) => Buffer.from(chunk, 'base64'))),
-    mimeType: result.mimeType,
-    reportedBytes: result.size,
-  };
-}
-
-async function captureMGBlob(page, button, seenBlobUrls) {
-  const beforeClickBlobUrls = await currentBlobVideoUrls(page);
-  await button.click({ force: true, timeout: 3000 });
-  // 点击前已存在的 blob 一并排除，避免把旧预览视频误认为新 MG（与 fallback 分支保持一致）
-  const excludedBlobUrls = new Set([...seenBlobUrls, ...beforeClickBlobUrls]);
-  const candidate = await waitForWebmBlobVideo(page, excludedBlobUrls);
-  if (candidate) {
-    const blobVideo = await readBlobVideo(page, candidate.src);
-    return { ...blobVideo, blobUrl: candidate.src, candidate };
-  }
-  // 回退：华声部分 MG 动画为 mp4 等非 webm 格式，仍应下载
-  const newBlobUrl = await waitForBlobVideoUrl(page, excludedBlobUrls, 3000);
-  if (newBlobUrl) {
-    const blobVideo = await readBlobVideo(page, newBlobUrl);
-    return { ...blobVideo, blobUrl: newBlobUrl, candidate: null };
-  }
-  throw new Error('未找到 blob video 元素');
-}
-
 async function extractMGAnimations(page, args) {
   const materials = [];
   const failures = [];
-  const seenBlobUrls = new Set();
+  let existingCount = 0;
 
-  console.log('\n[MG] 收集分镜卡片...');
-  const cards = await collectClipCards(page);
-  console.log(`[MG] 发现 ${cards.length} 个分镜卡片`);
+  console.log('\n[MG] 收集时间轴 MG 条带...');
+  const mgNumbers = await collectTimelineMGNumbers(page);
+  console.log(`[MG] 发现 ${mgNumbers.length} 个 MG 动画: ${mgNumbers.map(pad2).join(', ')}`);
 
-  let processedCount = 0;
-  let skippedCards = 0;
-  for (const card of cards) {
-    if (args.startCard && Number(card.clipId) < args.startCard) {
-      skippedCards += 1;
-      continue;
-    }
+  for (const mgNumber of mgNumbers) {
+    if (args.startCard && mgNumber < args.startCard) continue;
     if (args.limit && materials.length >= args.limit) break;
 
-    const cardLocator = page.locator(`[class*="video-clip-${card.clipId}"]`).first();
-    await cardLocator.scrollIntoViewIfNeeded().catch(() => {});
-    await page.waitForTimeout(200);
-
-    const coverImg = cardLocator.locator(COVER_IMG_SELECTOR).first();
-    await coverImg.hover({ timeout: 2500 }).catch(() => {});
-    await page.waitForTimeout(400);
-
-    const mgButtons = cardLocator.locator(MG_BUTTON_SELECTOR);
-    const mgCount = await mgButtons.count().catch(() => 0);
-    if (mgCount === 0) continue;
-
-    processedCount += 1;
-
-    for (let i = 0; i < mgCount; i += 1) {
-      if (args.limit && materials.length >= args.limit) break;
-
-      const button = mgButtons.nth(i);
-      const buttonText = await button.textContent().catch(() => '');
-      const mgNumber = mgAnimationNumber(buttonText);
-      if (!mgNumber) continue;
-
-      // 检查是否已存在（webm 或 mp4 都算已下载）
-      const existingExts = ['.webm', '.mp4'];
-      let alreadyExists = false;
-      for (const ext of existingExts) {
-        try {
-          await fs.access(path.join(args.outDir, mgFilename(mgNumber, ext === '.webm' ? 'video/webm' : 'video/mp4')));
-          alreadyExists = true;
-          break;
-        } catch { /* 不存在 */ }
-      }
-      if (alreadyExists) {
-        console.log(`[MG] 跳过 MG动画 ${pad2(mgNumber)} (已存在)`);
-        continue;
-      }
-
-      try {
-        const result = await captureMGBlob(page, button, seenBlobUrls);
-        seenBlobUrls.add(result.blobUrl);
-
-        const filename = mgFilename(mgNumber, result.mimeType);
-        const filePath = path.join(args.outDir, filename);
-
-        console.log(`[MG] 捕获 MG动画 ${pad2(mgNumber)}: ${shortUrl(result.blobUrl)} (${(result.body.byteLength / 1024 / 1024).toFixed(1)} MB)`);
-
-        materials.push({
-          mgNumber,
-          filename,
-          filePath,
-          blobUrl: result.blobUrl,
-          body: result.body,
-          bytes: result.body.byteLength,
-          mimeType: result.mimeType,
-          reportedBytes: result.reportedBytes,
-        });
-      } catch (error) {
-        failures.push({ mgNumber, clipId: card.clipId, reason: error.message });
-        console.warn(`[MG] MG动画 ${pad2(mgNumber)} 提取失败: ${error.message}`);
-      }
+    if (await mgFileExists(args.outDir, mgNumber)) {
+      existingCount += 1;
+      console.log(`[MG] 跳过 MG动画 ${pad2(mgNumber)} (已存在)`);
+      continue;
     }
-  }
 
-  if (skippedCards > 0) {
-    console.log(`[MG] 已跳过 ${skippedCards} 个分镜卡片 (clipId < ${args.startCard})`);
+    const selected = await selectTimelineMG(page, mgNumber);
+    if (!selected) {
+      failures.push({ mgNumber, reason: '未找到对应的时间轴 MG 条带' });
+      continue;
+    }
+    const item = await waitForDirectMGMaterial(page, mgNumber);
+    if (!item) {
+      failures.push({ mgNumber, reason: '素材窗口未出现对应的 WebM 直链' });
+      console.warn(`[MG] MG动画 ${pad2(mgNumber)} 未找到 WebM 直链`);
+      continue;
+    }
+    materials.push({ ...item, filePath: path.join(args.outDir, item.filename) });
+    console.log(`[MG] 发现直链 MG动画 ${pad2(mgNumber)}: ${shortUrl(item.url)}`);
   }
-  console.log(`[MG] 已处理 ${processedCount} 个分镜，捕获 ${materials.length} 个 MG 动画`);
+  console.log(`[MG] 扫描完成：总计 ${mgNumbers.length} 个，待下载 ${materials.length} 个，已存在 ${existingCount} 个`);
   return { materials, failures };
 }
 
@@ -477,9 +374,6 @@ export async function downloadMGAnimations({ page, args }) {
   await page.goto(args.url, { waitUntil: 'domcontentloaded', timeout: 60000 });
   await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
 
-  // 注入 CSS 强制显示 MG 按钮容器（华声改版后 .clip-card-box 伪元素拦截 hover 事件）
-  await page.addStyleTag({ content: '[class*="video-clip-"] .absolute.h-\\[24px\\] { display: flex !important; }' });
-
   if (!args.headless && await isProbablyLoggedOut(page)) {
     await pauseForEnter('页面需要登录。请在打开的浏览器窗口中确认登录状态。');
     await page.reload({ waitUntil: 'domcontentloaded' });
@@ -494,21 +388,39 @@ export async function downloadMGAnimations({ page, args }) {
     const record = {
       type: 'mg',
       mgNumber: item.mgNumber,
-      sourceBlobUrl: item.blobUrl,
+      sourceType: 'direct',
+      sourceUrl: item.url,
       status: args.dryRun ? 'dry-run' : 'pending',
       filename: item.filename,
       mimeType: item.mimeType,
-      bytes: item.bytes,
+      bytes: item.bytes || 0,
       reportedBytes: item.reportedBytes,
     };
 
     try {
       if (!args.dryRun) {
-        await fs.writeFile(item.filePath, item.body, { flag: 'wx' });
+        const safeUrl = await assertSafeDownloadUrl(item.url);
+        const response = await page.request.get(safeUrl, {
+          headers: { Referer: args.url },
+          timeout: 60000,
+          maxRedirects: 0, // 禁止跳转，避免 302 把请求带到内网绕过上面的校验
+        });
+        if (!response.ok()) {
+          const redirectHint = response.status() >= 300 && response.status() < 400 ? '（重定向被安全策略拒绝）' : '';
+          throw new Error(`HTTP ${response.status()}${redirectHint}`);
+        }
+        await assertSafeDownloadUrl(response.url()); // 防御纵深：最终落地地址仍须为公网
+        const body = await response.body();
+        const isWebm = body.length >= 4 && body.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]));
+        if (!isWebm) throw new Error('直链响应不是 WebM 文件');
+        record.bytes = body.byteLength;
+        record.reportedBytes = body.byteLength;
+        console.log(`[MG] 直链下载 MG动画 ${pad2(item.mgNumber)}: ${shortUrl(item.url)} (${(body.byteLength / 1024 / 1024).toFixed(1)} MB)`);
+        await fs.writeFile(item.filePath, body, { flag: 'wx' });
         record.status = 'downloaded';
         record.filePath = item.filePath;
         downloaded += 1;
-        console.log(`[MG] 已下载 ${item.filename} (${item.bytes} bytes)`);
+        console.log(`[MG] 已下载 ${item.filename} (${record.bytes} bytes)`);
       }
     } catch (error) {
       record.status = 'failed';

@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   createModePrompt,
+  evidenceDirName,
   isVideoProjectUrl,
   normalizeProjectUrl,
   normalizeScriptText,
@@ -56,7 +57,7 @@ test('createModePrompt returns pure video mode instruction for A', () => {
 });
 
 test('createModePrompt returns MG mode instruction for B', () => {
-  assert.equal(createModePrompt('B'), '方案 B，确定只生成2 个 MG动画');
+  assert.equal(createModePrompt('B'), '方案 B');
 });
 
 test('parseCreateArgs requires a txt path', () => {
@@ -141,4 +142,9 @@ test('runStepWithRetry reports the step after two failures', async () => {
     }),
     /点击创建.*按钮不存在/
   );
+});
+
+test('evidenceDirName formats timestamped failure directory name', () => {
+  const date = new Date(2026, 6, 15, 20, 30, 5);
+  assert.equal(evidenceDirName(date), 'create-failure-20260715-203005');
 });

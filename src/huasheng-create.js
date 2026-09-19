@@ -16,6 +16,9 @@ const MIN_PROJECT_STEP_WAIT_MS = 10_000;
 const CHAT_INPUT_SELECTOR = [
   'textarea[placeholder="输入自定义回答"]',
   'textarea[placeholder="输入你的任何想法"]',
+  // 2026-07 华声改版：项目页聊天输入框从 textarea 换成 contenteditable div
+  'div[contenteditable="true"]',
+  'div[contenteditable=""]',
 ].join(', ');
 const SEND_BUTTON_SELECTOR = 'button[title="发送"]';
 const STOP_BUTTON_SELECTOR = 'button[title="停止"]';
@@ -71,7 +74,7 @@ export function normalizeScriptText(rawText) {
 }
 
 export function createModePrompt(mode) {
-  return mode === 'B' ? '方案 B，确定只生成2 个 MG动画' : '方案 A';
+  return `方案 ${mode}`;
 }
 
 export async function readScriptText(txtPath) {
@@ -101,6 +104,50 @@ export function normalizeProjectUrl(rawUrl) {
     throw new Error(`不是有效的视频项目 URL: ${rawUrl}`);
   }
   return new URL(rawUrl).toString();
+}
+
+export function evidenceDirName(date) {
+  const p = (n) => String(n).padStart(2, '0');
+  return `create-failure-${date.getFullYear()}${p(date.getMonth() + 1)}${p(date.getDate())}`
+    + `-${p(date.getHours())}${p(date.getMinutes())}${p(date.getSeconds())}`;
+}
+
+// 失败自动取证：截图 + 对话区 DOM dump，供事后诊断（页面改版时无需保留浏览器现场）
+async function captureFailureEvidence(page) {
+  const dir = path.resolve('debug', evidenceDirName(new Date()));
+  await fs.mkdir(dir, { recursive: true });
+
+  await page.screenshot({ path: path.join(dir, 'page.png') }).catch(() => {});
+
+  const dump = await page.evaluate(() => {
+    const isVisible = (el) => {
+      const style = window.getComputedStyle(el);
+      const rect = el.getBoundingClientRect();
+      return style.visibility !== 'hidden' && style.display !== 'none'
+        && rect.width > 0 && rect.height > 0;
+    };
+    const describe = (el) => ({
+      tag: el.tagName.toLowerCase(),
+      placeholder: el.getAttribute('placeholder') || el.getAttribute('data-placeholder') || null,
+      title: el.getAttribute('title') || null,
+      cls: el.className ? String(el.className).slice(0, 120) : null,
+      text: (el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 80),
+      visible: isVisible(el),
+      disabled: 'disabled' in el ? el.disabled : null,
+    });
+    return {
+      url: location.href,
+      textareas: Array.from(document.querySelectorAll('textarea')).map(describe),
+      editables: Array.from(document.querySelectorAll('[contenteditable="true"], [contenteditable=""]')).map(describe),
+      titledButtons: Array.from(document.querySelectorAll('button[title]')).map(describe),
+      keyButtons: Array.from(document.querySelectorAll('button, [role="button"]'))
+        .filter((el) => /方案|确认|发送|生成|MG|创建/.test(el.textContent || ''))
+        .map(describe),
+    };
+  }).catch((error) => ({ dumpError: error.message }));
+
+  await fs.writeFile(path.join(dir, 'dom.json'), `${JSON.stringify(dump, null, 2)}\n`, 'utf8');
+  return dir;
 }
 
 export async function runStepWithRetry(stepName, operation) {
@@ -246,12 +293,8 @@ async function clickButtonByExactText(page, text) {
   await button.click();
 }
 
-async function submitChatMessage(page, message) {
-  const input = await findVisibleChatInput(page);
-  await input.fill(message);
-
-  const sendButton = page.locator(SEND_BUTTON_SELECTOR).last();
-  await page.waitForFunction(
+async function waitForSendButtonEnabled(page, timeoutMs) {
+  return page.waitForFunction(
     (selector) => {
       const buttons = Array.from(document.querySelectorAll(selector));
       return buttons.some((button) => {
@@ -265,10 +308,26 @@ async function submitChatMessage(page, message) {
       });
     },
     SEND_BUTTON_SELECTOR,
-    { timeout: STEP_TIMEOUT_MS }
-  );
+    { timeout: timeoutMs }
+  ).then(() => true).catch(() => false);
+}
 
-  if (await sendButton.isVisible().catch(() => false)) {
+export async function submitChatMessage(page, message) {
+  const input = await findVisibleChatInput(page);
+  await input.fill(message);
+
+  // fill 对 contenteditable 可能不触发前端状态更新（发送按钮保持禁用），回退为逐字键入
+  let enabled = await waitForSendButtonEnabled(page, 5_000);
+  if (!enabled) {
+    await input.click();
+    await page.keyboard.press('ControlOrMeta+A');
+    await page.keyboard.press('Backspace');
+    await page.keyboard.type(message, { delay: 50 });
+    enabled = await waitForSendButtonEnabled(page, STEP_TIMEOUT_MS);
+  }
+
+  const sendButton = page.locator(SEND_BUTTON_SELECTOR).last();
+  if (enabled && await sendButton.isVisible().catch(() => false)) {
     await sendButton.click();
   } else {
     await input.press('Enter');
@@ -282,7 +341,7 @@ async function waitAndSubmit(page, message, waitSeconds) {
   await submitChatMessage(page, message);
 }
 
-async function waitForAiReady(page) {
+export async function waitForAiReady(page) {
   await page.waitForTimeout(MIN_PROJECT_STEP_WAIT_MS).catch(() => {});
   await page.waitForFunction(
     ({ sendSelector, stopSelector }) => {
@@ -311,7 +370,7 @@ async function waitAndSubmitOnProjectPage(context, fallbackPage, message) {
   return page;
 }
 
-async function runProjectStep({ context, projectPage, projectUrl, stepName, message }) {
+async function runProjectStep({ context, projectPage, projectUrl, stepName, message, stepIndex, mode }) {
   try {
     return await waitAndSubmitOnProjectPage(context, projectPage, message);
   } catch (error) {
@@ -319,6 +378,7 @@ async function runProjectStep({ context, projectPage, projectUrl, stepName, mess
       `[${stepName}] 失败，已进入项目页，不会重新创建项目。`,
       `项目 URL: ${projectUrl}`,
       `下一步请在项目页输入框输入: ${message}`,
+      `或运行续传命令: npm run resume -- "${projectUrl}" --mode ${mode} --start ${stepIndex}`,
       `原始错误: ${error.message}`,
     ].join('\n'));
   }
@@ -406,6 +466,8 @@ export async function createHuashengProject({ context, page, args, scriptText })
     projectUrl,
     stepName: `提交${args.mode}方案指令`,
     message: createModePrompt(args.mode),
+    stepIndex: 1,
+    mode: args.mode,
   });
 
   // 等待 AI 可输入 → 输入"确认"
@@ -415,6 +477,8 @@ export async function createHuashengProject({ context, page, args, scriptText })
     projectUrl,
     stepName: '第一次提交确认',
     message: '确认',
+    stepIndex: 2,
+    mode: args.mode,
   });
 
   // 等待 AI 可输入 → 输入"确认"
@@ -424,6 +488,8 @@ export async function createHuashengProject({ context, page, args, scriptText })
     projectUrl,
     stepName: '第二次提交确认',
     message: '确认',
+    stepIndex: 3,
+    mode: args.mode,
   });
 
   return projectUrl;
@@ -447,6 +513,13 @@ export async function main(argv = process.argv.slice(2)) {
   } catch (error) {
     console.error(`\n创建失败: ${error.message}`);
     console.error(`当前页面: ${page.url()}`);
+    const evidenceDir = await captureFailureEvidence(page).catch((captureError) => {
+      console.error(`失败取证未成功: ${captureError.message}`);
+      return null;
+    });
+    if (evidenceDir) {
+      console.error(`失败现场已保存: ${evidenceDir}（page.png + dom.json）`);
+    }
     await holdBrowserOpen('任务失败，请检查浏览器现场。');
   }
 }
